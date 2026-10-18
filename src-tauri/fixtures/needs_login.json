@@ -1,0 +1,6 @@
+{
+  "BackendState": "NeedsLogin",
+  "Self": null,
+  "Peer": null,
+  "AuthURL": "https://login.example-tailnet.ts.net/unused"
+}

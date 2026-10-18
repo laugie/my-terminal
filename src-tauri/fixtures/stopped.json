@@ -1,0 +1,11 @@
+{
+  "BackendState": "Stopped",
+  "Self": {
+    "HostName": "self-host",
+    "DNSName": "self-host.example-tailnet.ts.net.",
+    "OS": "linux",
+    "Online": false,
+    "TailscaleIPs": ["100.64.0.1"]
+  },
+  "Peer": {}
+}
