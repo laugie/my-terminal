@@ -5,4 +5,4 @@
 - 版本计划：[docs/PLAN.md](docs/PLAN.md)
 - 变更记录：[CHANGELOG.md](CHANGELOG.md)
 
-当前状态：规划中（v0.1 开发前）。开发由 AI 工程团队以草稿 PR 方式进行，合并需仓库所有者授权。
+当前状态：v0.1 骨架（Tauri 2 + Vite + 原生 TypeScript）。本地预览：`npm ci && npm run tauri dev`。开发由 AI 工程团队以草稿 PR 方式进行，合并需仓库所有者授权。
