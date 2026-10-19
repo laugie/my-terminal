@@ -1,0 +1,51 @@
+{
+  "Version": "0.0.0-test",
+  "BackendState": "Running",
+  "MagicDNSSuffix": "example-tailnet.ts.net",
+  "Self": {
+    "ID": "self",
+    "HostName": "self-host",
+    "DNSName": "self-host.example-tailnet.ts.net.",
+    "OS": "linux",
+    "Online": true,
+    "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"],
+    "ExtraField": "ignored"
+  },
+  "Peer": {
+    "nodekey:a": {
+      "ID": "a",
+      "HostName": "host-a",
+      "DNSName": "host-a.example-tailnet.ts.net.",
+      "OS": "linux",
+      "Online": true,
+      "TailscaleIPs": ["fd7a:115c:a1e0::2", "100.64.0.2", "100.64.0.20"],
+      "CurAddr": "ignored"
+    },
+    "nodekey:b": {
+      "ID": "b",
+      "HostName": "host-b",
+      "DNSName": "host-b.example-tailnet.ts.net.",
+      "OS": "windows",
+      "Online": false,
+      "TailscaleIPs": ["100.64.0.3"]
+    },
+    "nodekey:c": {
+      "ID": "c",
+      "HostName": "host-c",
+      "DNSName": "",
+      "OS": "macOS",
+      "Online": true,
+      "TailscaleIPs": ["100.64.0.4", "fd7a:115c:a1e0::4"]
+    },
+    "nodekey:d": {
+      "ID": "d",
+      "HostName": "host-d",
+      "OS": "freebsd",
+      "Online": false,
+      "TailscaleIPs": ["fd7a:115c:a1e0::5"]
+    }
+  },
+  "User": {
+    "1": { "LoginName": "user" }
+  }
+}

@@ -1,0 +1,14 @@
+[[permission]]
+identifier = "allow-list-hosts"
+description = "Enables the list_hosts command without any pre-configured scope."
+commands.allow = ["list_hosts"]
+
+[[permission]]
+identifier = "allow-add-manual-host"
+description = "Enables the add_manual_host command without any pre-configured scope."
+commands.allow = ["add_manual_host"]
+
+[[permission]]
+identifier = "allow-remove-manual-host"
+description = "Enables the remove_manual_host command without any pre-configured scope."
+commands.allow = ["remove_manual_host"]

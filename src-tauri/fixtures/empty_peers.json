@@ -1,0 +1,11 @@
+{
+  "BackendState": "Running",
+  "Self": {
+    "HostName": "self-host",
+    "DNSName": "self-host.example-tailnet.ts.net.",
+    "OS": "linux",
+    "Online": true,
+    "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"]
+  },
+  "Peer": {}
+}
