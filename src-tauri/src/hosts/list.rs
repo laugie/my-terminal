@@ -37,6 +37,9 @@ pub struct ListHostsResponse {
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub self_name: Option<String>,
+    /// Set when the JSON config was reset or comes from a newer version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_notice: Option<String>,
 }
 
 pub fn compose_list(output: &RunOutput, manuals: &[ManualHost]) -> ListHostsResponse {
@@ -114,6 +117,7 @@ fn response(
         hosts,
         message,
         self_name,
+        config_notice: None,
     }
 }
 
@@ -460,5 +464,16 @@ mod tests {
         );
         assert_eq!(listed.status, "error");
         assert_eq!(listed.message.as_deref(), Some(MSG_UNKNOWN_STATE));
+    }
+
+    #[test]
+    fn config_notice_serializes_only_when_present() {
+        let mut listed = compose_list(&RunOutput::NotInstalled, &[]);
+        let omitted = serde_json::to_value(&listed).unwrap();
+        assert!(omitted.get("configNotice").is_none());
+
+        listed.config_notice = Some("配置文件损坏，已备份并重置".to_string());
+        let json = serde_json::to_value(&listed).unwrap();
+        assert_eq!(json["configNotice"], "配置文件损坏，已备份并重置");
     }
 }

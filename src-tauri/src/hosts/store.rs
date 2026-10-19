@@ -1,10 +1,11 @@
-/// A server the user added by hand. Kept only in memory for this process.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+/// A server the user added by hand.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualHost {
     pub id: String,
     pub name: String,
     pub host: String,
+    #[serde(default)]
     pub user: Option<String>,
     pub port: u16,
 }
@@ -18,11 +19,10 @@ pub struct NewManualHost {
     pub port: u16,
 }
 
-/// In-memory collection of manual servers. A later issue can persist these;
-/// this trait is the storage boundary.
+/// Storage boundary for manual servers.
 pub trait HostStore {
     fn list(&self) -> Vec<ManualHost>;
-    fn add(&mut self, host: NewManualHost) -> ManualHost;
+    fn add(&mut self, host: NewManualHost) -> Result<ManualHost, String>;
     fn remove(&mut self, id: &str) -> Result<(), String>;
 }
 
@@ -44,7 +44,7 @@ impl HostStore for MemoryHostStore {
         self.hosts.clone()
     }
 
-    fn add(&mut self, host: NewManualHost) -> ManualHost {
+    fn add(&mut self, host: NewManualHost) -> Result<ManualHost, String> {
         self.next_id += 1;
         let stored = ManualHost {
             id: format!("manual-{}", self.next_id),
@@ -54,7 +54,7 @@ impl HostStore for MemoryHostStore {
             port: host.port,
         };
         self.hosts.push(stored.clone());
-        stored
+        Ok(stored)
     }
 
     fn remove(&mut self, id: &str) -> Result<(), String> {
@@ -220,12 +220,15 @@ mod tests {
         let mut store = MemoryHostStore::new();
         let store_ref: &mut dyn HostStore = &mut store;
         let added = store_ref
-            .add(validate_manual_input("lab", "host-a", Some("user"), Some(2222)).unwrap());
+            .add(validate_manual_input("lab", "host-a", Some("user"), Some(2222)).unwrap())
+            .unwrap();
         assert_eq!(added.id, "manual-1");
         assert_eq!(added.port, 2222);
         assert_eq!(store_ref.list().len(), 1);
 
-        let second = store_ref.add(validate_manual_input("other", "host-b", None, None).unwrap());
+        let second = store_ref
+            .add(validate_manual_input("other", "host-b", None, None).unwrap())
+            .unwrap();
         assert_eq!(second.id, "manual-2");
         store_ref.remove("manual-1").unwrap();
         let left = store_ref.list();

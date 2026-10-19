@@ -121,6 +121,11 @@ async function onAdd(): Promise<void> {
 function render(result: ListHostsResponse): void {
   statusBar.replaceChildren();
   statusBar.dataset.state = result.status;
+  if (result.configNotice) {
+    const notice = el("span", "status-notice");
+    notice.textContent = result.configNotice;
+    statusBar.append(notice);
+  }
   if (result.message) {
     const message = el("span", "status-text");
     message.textContent = result.message;

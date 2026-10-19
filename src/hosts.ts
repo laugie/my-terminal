@@ -22,6 +22,7 @@ export interface ListHostsResponse {
   hosts: HostEntry[];
   message?: string;
   selfName?: string;
+  configNotice?: string;
 }
 
 export interface NewManualHost {

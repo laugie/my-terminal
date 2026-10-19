@@ -132,6 +132,10 @@ body {
   color: #bdbdbd;
 }
 
+.status-notice {
+  color: #e6c98a;
+}
+
 .dot {
   width: 8px;
   height: 8px;
