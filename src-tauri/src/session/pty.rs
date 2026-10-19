@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -12,19 +12,40 @@ use super::SessionEvent;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Shutdown waits this long for the reaper after the PTY ends are released.
+/// On timeout the join is detached so close cannot block forever.
+const REAPER_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How long release waits if a write or resize still holds the end.
+const END_LOCK_WAIT: Duration = Duration::from_millis(250);
+
+type PtyWriter = Box<dyn std::io::Write + Send>;
+type PtyMaster = Box<dyn MasterPty + Send>;
+
 /// One running ssh process and the threads that move its output.
 pub struct LiveSession {
     pub id: String,
-    pub writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
-    pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    /// `None` once shutdown has released the write end.
+    pub writer: Arc<Mutex<Option<PtyWriter>>>,
+    /// `None` once shutdown has released the master.
+    ///
+    /// ConPTY does not EOF a blocked read until both ends are dropped.
+    pub master: Arc<Mutex<Option<PtyMaster>>>,
     kill_tx: Option<mpsc::Sender<()>>,
     reaper: Option<JoinHandle<()>>,
 }
 
 impl LiveSession {
-    /// Stop the child, wait until it is reaped, and join the reaper thread.
+    /// Stop the child, release the PTY ends, and wait until it is reaped.
     pub fn shutdown(mut self) -> Result<(), String> {
+        self.finish()
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
         self.signal_stop();
+        // Drop the ends before joining. On Windows the reader never sees EOF
+        // while the master or writer is still open, so joining first deadlocks.
+        self.release_ends();
         self.join_reaper()
     }
 
@@ -34,9 +55,14 @@ impl LiveSession {
         }
     }
 
+    fn release_ends(&self) {
+        take_end(&self.writer);
+        take_end(&self.master);
+    }
+
     fn join_reaper(&mut self) -> Result<(), String> {
         if let Some(handle) = self.reaper.take() {
-            handle.join().map_err(|_| "会话线程异常退出".to_string())?;
+            return join_with_timeout(handle);
         }
         Ok(())
     }
@@ -44,19 +70,20 @@ impl LiveSession {
 
 impl Drop for LiveSession {
     fn drop(&mut self) {
-        self.signal_stop();
-        let _ = self.join_reaper();
+        let _ = self.finish();
     }
 }
 
 /// Open a PTY and spawn `program` with `args` directly.
 ///
 /// `program` is the absolute path of the system ssh binary. Arguments are
-/// appended one by one; the shell is not involved.
-pub fn start_pty(
+/// appended one by one; the shell is not involved. Callers outside this crate
+/// cannot pass a program: the only command that starts a session resolves ssh
+/// itself.
+pub(crate) fn start_pty(
     program: &Path,
     args: &[String],
-    on_event: tauri::ipc::Channel<SessionEvent>,
+    on_event: impl Fn(SessionEvent) -> Result<(), ()> + Send + 'static,
 ) -> Result<LiveSession, String> {
     if !program.is_absolute() {
         return Err(SSH_NOT_FOUND.to_string());
@@ -109,6 +136,9 @@ pub fn start_pty(
             }) {
             Ok(handle) => handle,
             Err(_) => {
+                // `reader` moved into the closure, which is dropped on spawn failure.
+                drop(writer);
+                drop(master);
                 let _ = terminate(child);
                 return Err("无法启动会话线程".to_string());
             }
@@ -129,22 +159,29 @@ pub fn start_pty(
                 return;
             };
             let code = wait_or_kill(child, kill_rx);
-            let _ = reader_handle.join();
+            // Publish the exit before joining the reader. The reader blocks
+            // until the master and writer are dropped, which shutdown does
+            // only after this event has been queued.
             let _ = event_tx.send(SessionEvent::Exit { code });
+            let _ = reader_handle.join();
         }) {
         Ok(handle) => handle,
         Err(_) => {
+            drop(writer);
+            drop(master);
+            let _ = join_with_timeout(reader_handle);
             let _ = terminate(child);
-            let _ = reader_handle.join();
             return Err("无法启动会话线程".to_string());
         }
     };
 
     if let Err(err) = boot_tx.send((child, kill_rx, reader_handle, event_tx)) {
         let (child, _, reader_handle, _) = err.0;
+        drop(writer);
+        drop(master);
+        let _ = join_with_timeout(reader_handle);
+        let _ = join_with_timeout(reaper);
         let _ = terminate(child);
-        let _ = reader_handle.join();
-        let _ = reaper.join();
         return Err("无法启动会话线程".to_string());
     }
 
@@ -154,7 +191,7 @@ pub fn start_pty(
         .name("pty-forward".to_string())
         .spawn(move || {
             while let Ok(event) = event_rx.recv() {
-                if on_event.send(event).is_err() {
+                if on_event(event).is_err() {
                     break;
                 }
             }
@@ -164,8 +201,10 @@ pub fn start_pty(
             drop(handle);
         }
         Err(_) => {
+            drop(writer);
+            drop(master);
             let _ = kill_tx.send(());
-            let _ = reaper.join();
+            let _ = join_with_timeout(reaper);
             return Err("无法启动会话线程".to_string());
         }
     }
@@ -173,11 +212,66 @@ pub fn start_pty(
     let id = format!("session-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
     Ok(LiveSession {
         id,
-        writer: Arc::new(Mutex::new(writer)),
-        master: Arc::new(Mutex::new(master)),
+        writer: Arc::new(Mutex::new(Some(writer))),
+        master: Arc::new(Mutex::new(Some(master))),
         kill_tx: Some(kill_tx),
         reaper: Some(reaper),
     })
+}
+
+/// Take the PTY end out of the mutex and drop it.
+///
+/// A blocking lock here can stall behind `write_all`. Give up after a short
+/// wait so the timed reaper join still runs.
+fn take_end<T>(slot: &Mutex<Option<T>>) {
+    let deadline = Instant::now() + END_LOCK_WAIT;
+    loop {
+        match slot.try_lock() {
+            Ok(mut guard) => {
+                drop(guard.take());
+                return;
+            }
+            Err(TryLockError::Poisoned(poisoned)) => {
+                drop(poisoned.into_inner().take());
+                return;
+            }
+            Err(TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+/// Join `handle`, or detach it when it is still running after the timeout.
+fn join_with_timeout(handle: JoinHandle<()>) -> Result<(), String> {
+    let (tx, rx) = mpsc::channel();
+    let waiter = thread::Builder::new()
+        .name("pty-join".to_string())
+        .spawn(move || {
+            let _ = tx.send(handle.join());
+        });
+    let Ok(waiter) = waiter else {
+        // Spawn failed and dropped `handle`, which detaches that thread.
+        return Ok(());
+    };
+    match rx.recv_timeout(REAPER_JOIN_TIMEOUT) {
+        Ok(Ok(())) => {
+            let _ = waiter.join();
+            Ok(())
+        }
+        Ok(Err(_)) => {
+            let _ = waiter.join();
+            Err("会话线程异常退出".to_string())
+        }
+        Err(_) => {
+            // Still running. Detach the waiter; do not block the caller.
+            drop(waiter);
+            Ok(())
+        }
+    }
 }
 
 fn wait_or_kill(
@@ -222,6 +316,77 @@ fn terminate(mut child: Box<dyn Child + Send + Sync>) -> Option<i32> {
                 };
             }
             Err(_) => return None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Drives `start_pty` with a stand-in program. Not a frontend command.
+    #[test]
+    fn pty_session_emits_output_and_exit_code_then_shutdown() {
+        let (program, args) = short_lived_program();
+        let (tx, rx) = mpsc::channel();
+        let session = start_pty(&program, &args, move |event| tx.send(event).map_err(|_| ()))
+            .expect("start_pty");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut output = Vec::new();
+        let mut exit_code = None;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now());
+            if remain.is_zero() {
+                break;
+            }
+            match rx.recv_timeout(remain) {
+                Ok(SessionEvent::Data { bytes }) => output.extend(bytes),
+                Ok(SessionEvent::Exit { code }) => exit_code = Some(code),
+                Err(_) => break,
+            }
+            if bytes_contain_hi(&output) && exit_code == Some(Some(3)) {
+                break;
+            }
+        }
+
+        let started = Instant::now();
+        let shutdown_result = session.shutdown();
+        let elapsed = started.elapsed();
+
+        let text = String::from_utf8_lossy(&output);
+        assert!(
+            bytes_contain_hi(&output),
+            "expected output containing hi within 3s, got {text:?} exit={exit_code:?}"
+        );
+        assert_eq!(exit_code, Some(Some(3)), "output={text:?}");
+        shutdown_result.expect("shutdown");
+        // The join timeout is 3s and then detaches. A hang that only unblocks
+        // by detaching must fail this tighter bound.
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "shutdown took {elapsed:?}"
+        );
+    }
+
+    fn bytes_contain_hi(output: &[u8]) -> bool {
+        String::from_utf8_lossy(output).contains("hi")
+    }
+
+    fn short_lived_program() -> (PathBuf, Vec<String>) {
+        if cfg!(windows) {
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+            let program = PathBuf::from(root).join("System32").join("cmd.exe");
+            (
+                program,
+                vec!["/c".to_string(), "echo hi & exit 3".to_string()],
+            )
+        } else {
+            (
+                PathBuf::from("/bin/sh"),
+                vec!["-c".to_string(), "printf hi; exit 3".to_string()],
+            )
         }
     }
 }

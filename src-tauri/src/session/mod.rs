@@ -13,6 +13,9 @@ pub use args::{build_ssh_args, SshTarget};
 pub use binary::{resolve_ssh_binary, resolve_ssh_binary_with, OsKind, SSH_NOT_FOUND};
 pub use size::{normalize_pty_size, MAX_PTY_COLS, MAX_PTY_ROWS};
 
+/// Largest payload accepted by one `write_session` call.
+const MAX_WRITE_BYTES: usize = 64 * 1024;
+
 /// Bytes or a terminal exit, delivered on the channel passed to `open_session`.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -106,6 +109,9 @@ impl SessionState {
     }
 
     fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
+        if data.len() > MAX_WRITE_BYTES {
+            return Err("单次写入不能超过 64 KiB".to_string());
+        }
         let writer = {
             let guard = self.lock();
             match &guard.slot {
@@ -113,7 +119,8 @@ impl SessionState {
                 _ => return Err("会话不存在".to_string()),
             }
         };
-        let mut writer = writer.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut slot = writer.lock().unwrap_or_else(PoisonError::into_inner);
+        let writer = slot.as_mut().ok_or_else(|| "会话已结束".to_string())?;
         use std::io::Write;
         writer
             .write_all(data)
@@ -131,7 +138,8 @@ impl SessionState {
                 _ => return Err("会话不存在".to_string()),
             }
         };
-        let master = master.lock().unwrap_or_else(PoisonError::into_inner);
+        let slot = master.lock().unwrap_or_else(PoisonError::into_inner);
+        let master = slot.as_ref().ok_or_else(|| "会话已结束".to_string())?;
         master
             .resize(portable_pty::PtySize {
                 rows,
@@ -205,7 +213,9 @@ pub async fn open_session(
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let started = (|| {
             let program = resolve_ssh_binary()?;
-            pty::start_pty(&program, &args, on_event)
+            pty::start_pty(&program, &args, move |event| {
+                on_event.send(event).map(|_| ()).map_err(|_| ())
+            })
         })();
         match started {
             Ok(session) => match app_for_task
@@ -303,6 +313,18 @@ mod tests {
         assert_ne!(generation, next);
         assert_eq!(state.begin().unwrap_err(), "已有会话正在进行");
         state.abort(next);
+    }
+
+    #[test]
+    fn write_rejects_a_single_payload_over_64_kib() {
+        let state = SessionState::new();
+        let over = vec![1u8; MAX_WRITE_BYTES + 1];
+        assert_eq!(
+            state.write("session-1", &over).unwrap_err(),
+            "单次写入不能超过 64 KiB"
+        );
+        let exact = vec![1u8; MAX_WRITE_BYTES];
+        assert_eq!(state.write("session-1", &exact).unwrap_err(), "会话不存在");
     }
 
     #[test]
