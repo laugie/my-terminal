@@ -91,6 +91,7 @@ async function refresh(): Promise<void> {
       return;
     }
     statusBar.dataset.state = "error";
+    statusBar.title = "";
     statusBar.textContent = "读取服务器列表失败";
     formError.textContent = errorText(err);
   } finally {
@@ -134,6 +135,7 @@ async function onAdd(): Promise<void> {
 function render(result: ListHostsResponse): void {
   statusBar.replaceChildren();
   statusBar.dataset.state = result.status;
+  statusBar.title = result.message ?? "";
   if (result.configNotice) {
     const notice = el("span", "status-notice");
     notice.textContent = result.configNotice;
@@ -142,6 +144,7 @@ function render(result: ListHostsResponse): void {
   if (result.message) {
     const message = el("span", "status-text");
     message.textContent = result.message;
+    message.title = result.message;
     statusBar.append(message);
   }
   if (result.selfName) {

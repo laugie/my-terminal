@@ -10,21 +10,53 @@ pub const TAILSCALE_STATUS_ARGS: &[&str] = &["status", "--json"];
 /// Production timeout. Tests exercise the same runner with a shorter duration.
 pub const TAILSCALE_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Official macOS app binary. Checked only after PATH misses.
+/// Official macOS app binary. Checked after PATH and the usual CLI prefixes.
 pub const MACOS_TAILSCALE_PATH: &str = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+
+/// Wrapper installed by the Tailscale menu's "Install CLI" action.
+pub const USR_LOCAL_TAILSCALE_PATH: &str = "/usr/local/bin/tailscale";
+
+/// Homebrew prefix on Apple silicon.
+pub const HOMEBREW_TAILSCALE_PATH: &str = "/opt/homebrew/bin/tailscale";
+
+/// Generic Windows location. The expanded Program Files directory is not shown.
+pub const WINDOWS_TAILSCALE_DISPLAY: &str = r"%ProgramFiles%\Tailscale\tailscale.exe";
+
+/// Generic places named in the "command not found" message. PATH is not expanded.
+pub const TAILSCALE_SEARCH_DISPLAY: &[&str] = &[
+    "PATH",
+    USR_LOCAL_TAILSCALE_PATH,
+    HOMEBREW_TAILSCALE_PATH,
+    MACOS_TAILSCALE_PATH,
+    WINDOWS_TAILSCALE_DISPLAY,
+];
+
+/// Maximum characters kept from stderr or other CLI text shown in the UI.
+const CLI_TEXT_SUMMARY_CHARS: usize = 200;
 
 /// Outcome of one status invocation. The UI maps this onto the list response.
 #[derive(Debug)]
 pub enum RunOutput {
     NotInstalled,
-    TimedOut,
-    Failed,
-    Finished { code: Option<i32>, stdout: String },
+    TimedOut {
+        program: String,
+    },
+    Failed {
+        program: String,
+        detail: String,
+    },
+    Finished {
+        code: Option<i32>,
+        stdout: String,
+        stderr: String,
+        program: String,
+    },
 }
 
 /// Locate the Tailscale CLI.
 ///
-/// Order: an existing PATH hit, then the macOS app bundle, then
+/// Order: an existing PATH hit, `/usr/local/bin/tailscale`,
+/// `/opt/homebrew/bin/tailscale`, the macOS app bundle, then
 /// `%ProgramFiles%\Tailscale\tailscale.exe`. `exists` is injected so tests can
 /// simulate each location without touching the real filesystem.
 pub fn locate_tailscale_cli(
@@ -35,9 +67,15 @@ pub fn locate_tailscale_cli(
     if let Some(path) = path_hit {
         return Some(path);
     }
-    let macos = Path::new(MACOS_TAILSCALE_PATH);
-    if exists(macos) {
-        return Some(macos.to_path_buf());
+    for candidate in [
+        USR_LOCAL_TAILSCALE_PATH,
+        HOMEBREW_TAILSCALE_PATH,
+        MACOS_TAILSCALE_PATH,
+    ] {
+        let path = Path::new(candidate);
+        if exists(path) {
+            return Some(path.to_path_buf());
+        }
     }
     if let Some(dir) = program_files {
         let windows = dir.join("Tailscale").join("tailscale.exe");
@@ -80,13 +118,23 @@ pub(crate) fn run_command(program: &Path, args: &[&str], timeout: Duration) -> R
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // The app bundle binary stays in GUI mode unless TERM or SHLVL is set.
+        // Finder sets neither. TERM=dumb selects CLI mode without a shell and
+        // without depending on the parent environment. Do not set SHLVL.
+        .env("TERM", "dumb");
     hide_console(&mut command);
 
+    let program_label = public_program(program);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return RunOutput::NotInstalled,
-        Err(_) => return RunOutput::Failed,
+        Err(err) => {
+            return RunOutput::Failed {
+                program: program_label,
+                detail: err.to_string(),
+            };
+        }
     };
 
     let stdout = child.stdout.take();
@@ -103,27 +151,85 @@ pub(crate) fn run_command(program: &Path, args: &[&str], timeout: Duration) -> R
                 let _ = child.wait();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
-                return RunOutput::TimedOut;
+                return RunOutput::TimedOut {
+                    program: program_label,
+                };
             }
             Ok(None) => thread::sleep(Duration::from_millis(20)),
-            Err(_) => {
+            Err(err) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
-                return RunOutput::Failed;
+                return RunOutput::Failed {
+                    program: program_label,
+                    detail: err.to_string(),
+                };
             }
         }
     };
 
     let stdout = stdout_thread.join().unwrap_or_default();
-    // stderr is drained so the pipe cannot fill, and then discarded so a
-    // local path from the CLI cannot leak into the UI.
-    let _stderr = stderr_thread.join().unwrap_or_default();
+    let stderr = stderr_thread.join().unwrap_or_default();
     RunOutput::Finished {
         code: status.code(),
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        program: program_label,
     }
+}
+
+fn public_program(path: &Path) -> String {
+    redact_home(&path.to_string_lossy())
+}
+
+/// Replace the current home directory with `~` and drop control characters.
+/// The result is capped at 200 characters and is safe to show in the UI.
+pub(crate) fn summarize_cli_text(text: &str) -> String {
+    let redacted = redact_home(text);
+    let mut cleaned = String::new();
+    let mut pending_space = false;
+    for ch in redacted.chars() {
+        if ch.is_control() {
+            pending_space = true;
+            continue;
+        }
+        if pending_space && !cleaned.is_empty() && !cleaned.ends_with(' ') {
+            cleaned.push(' ');
+        }
+        pending_space = false;
+        cleaned.push(ch);
+    }
+    cleaned
+        .trim()
+        .chars()
+        .take(CLI_TEXT_SUMMARY_CHARS)
+        .collect()
+}
+
+fn redact_home(text: &str) -> String {
+    let mut homes = Vec::new();
+    for key in ["HOME", "USERPROFILE"] {
+        let Ok(value) = std::env::var(key) else {
+            continue;
+        };
+        let trimmed = value.trim_end_matches(['/', '\\']).to_string();
+        if trimmed.len() <= 1 {
+            continue;
+        }
+        let forward = trimmed.replace('\\', "/");
+        if forward != trimmed {
+            homes.push(forward);
+        }
+        homes.push(trimmed);
+    }
+    homes.sort_by_key(|home| std::cmp::Reverse(home.len()));
+    homes.dedup();
+    let mut result = text.to_string();
+    for home in homes {
+        result = result.replace(&home, "~");
+    }
+    result
 }
 
 fn read_pipe(pipe: Option<impl Read>) -> Vec<u8> {
@@ -177,6 +283,41 @@ mod tests {
     }
 
     #[test]
+    fn locate_checks_usr_local_then_homebrew_before_the_app_bundle() {
+        let usr = Path::new(USR_LOCAL_TAILSCALE_PATH);
+        let brew = Path::new(HOMEBREW_TAILSCALE_PATH);
+        let app = Path::new(MACOS_TAILSCALE_PATH);
+        let found = locate_tailscale_cli(None, |path| path == brew || path == app, None);
+        assert_eq!(found.as_deref(), Some(brew));
+        let found = locate_tailscale_cli(
+            None,
+            |path| path == usr || path == brew || path == app,
+            None,
+        );
+        assert_eq!(found.as_deref(), Some(usr));
+    }
+
+    #[test]
+    fn cli_text_summary_redacts_home_strips_controls_and_limits_length() {
+        assert_eq!(summarize_cli_text("ok\u{0001}\nnext"), "ok next");
+        assert!(!summarize_cli_text("a\nb").chars().any(|ch| ch.is_control()));
+        assert_eq!(summarize_cli_text(&"x".repeat(240)).chars().count(), 200);
+
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default();
+        let home = home.trim_end_matches(['/', '\\']).to_string();
+        if home.len() > 1 {
+            let summary = summarize_cli_text(&format!("see {home}/Library/log"));
+            assert_eq!(summary, "see ~/Library/log");
+            assert!(
+                !summary.contains(&home),
+                "home directory leaked into the summary"
+            );
+        }
+    }
+
+    #[test]
     fn locate_prefers_path_hit_over_defaults() {
         let from_path = PathBuf::from("/opt/bin/tailscale");
         let found = locate_tailscale_cli(Some(from_path.clone()), |_| true, None);
@@ -205,10 +346,12 @@ mod tests {
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let started = Instant::now();
         let output = run_command(&program, &arg_refs, Duration::from_millis(400));
-        assert!(
-            matches!(output, RunOutput::TimedOut),
-            "expected timeout, got {output:?}"
-        );
+        match output {
+            RunOutput::TimedOut { program } => {
+                assert!(!program.is_empty(), "timeout names the program")
+            }
+            other => panic!("expected timeout, got {other:?}"),
+        }
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 
@@ -217,7 +360,7 @@ mod tests {
     fn runner_captures_stdout_without_a_shell() {
         let output = run_command(Path::new("echo"), &["ok"], Duration::from_secs(2));
         match output {
-            RunOutput::Finished { code, stdout } => {
+            RunOutput::Finished { code, stdout, .. } => {
                 assert_eq!(code, Some(0));
                 assert_eq!(stdout.trim(), "ok");
             }

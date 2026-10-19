@@ -61,13 +61,21 @@ body {
 
 .status {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px 16px;
   margin: 16px 0;
   padding: 10px 12px;
   border-radius: 8px;
   background: #252526;
   border: 1px solid #333;
+  overflow: hidden;
+}
+
+.status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status[data-state="ok"] {
@@ -144,6 +152,11 @@ body {
 .host-address,
 .status-self {
   color: #bdbdbd;
+}
+
+.status-notice,
+.status-self {
+  flex: none;
 }
 
 .status-notice {

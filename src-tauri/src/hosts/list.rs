@@ -1,5 +1,5 @@
-use crate::hosts::exec::RunOutput;
-use crate::hosts::parse::{parse_status, TailnetStatus, TailscalePeer};
+use crate::hosts::exec::{summarize_cli_text, RunOutput, TAILSCALE_SEARCH_DISPLAY};
+use crate::hosts::parse::{parse_status, ParseError, TailnetStatus, TailscalePeer};
 use crate::hosts::store::ManualHost;
 
 pub const MSG_NOT_INSTALLED: &str = "未检测到 Tailscale，仅显示手动添加的服务器";
@@ -47,62 +47,159 @@ pub fn compose_list(output: &RunOutput, manuals: &[ManualHost]) -> ListHostsResp
         RunOutput::NotInstalled => response(
             "not_installed",
             manuals_only(manuals),
-            Some(MSG_NOT_INSTALLED.to_string()),
+            Some(not_installed_message()),
             None,
         ),
-        RunOutput::TimedOut => response(
+        RunOutput::TimedOut { program } => response(
             "error",
             manuals_only(manuals),
-            Some(MSG_TIMEOUT.to_string()),
+            Some(with_program(MSG_TIMEOUT, program)),
             None,
         ),
-        RunOutput::Failed => response(
+        RunOutput::Failed { program, detail } => response(
             "error",
             manuals_only(manuals),
-            Some(MSG_EXEC.to_string()),
+            Some(exec_failure_message(program, detail)),
             None,
         ),
-        RunOutput::Finished { code, stdout } => match parse_status(stdout) {
+        RunOutput::Finished {
+            code,
+            stdout,
+            stderr,
+            program,
+        } => match parse_status(stdout) {
             Ok(status) => from_status(status, manuals),
-            Err(_) if *code == Some(0) => response(
-                "error",
-                manuals_only(manuals),
-                Some(MSG_PARSE.to_string()),
-                None,
-            ),
-            Err(_) => response(
-                "not_running",
-                manuals_only(manuals),
-                Some(MSG_NOT_RUNNING.to_string()),
-                None,
-            ),
+            Err(err) => finish_unparsed(code, stdout, stderr, program, &err, manuals),
         },
+    }
+}
+
+fn not_installed_message() -> String {
+    let places = TAILSCALE_SEARCH_DISPLAY.join("、");
+    let (lead, rest) = MSG_NOT_INSTALLED
+        .split_once('，')
+        .expect("not-installed copy has a comma");
+    format!("{lead}（已查找 {places}），{rest}")
+}
+
+fn with_program(reason: &str, program: &str) -> String {
+    let program = program.trim();
+    if program.is_empty() {
+        reason.to_string()
+    } else {
+        format!("{reason}（{program}）")
+    }
+}
+
+fn exec_failure_message(program: &str, detail: &str) -> String {
+    if program.is_empty() && detail.is_empty() {
+        return MSG_EXEC.to_string();
+    }
+    let reason = summarize_cli_text(detail);
+    let reason = if reason.is_empty() {
+        "无法启动".to_string()
+    } else {
+        reason
+    };
+    format!("{MSG_EXEC}：{}", with_program(&reason, program))
+}
+
+fn finish_unparsed(
+    code: &Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    program: &str,
+    err: &ParseError,
+    manuals: &[ManualHost],
+) -> ListHostsResponse {
+    let stdout_reason = classify_stdout(stdout, err);
+    if *code == Some(0) {
+        return response(
+            "error",
+            manuals_only(manuals),
+            Some(format!(
+                "{MSG_PARSE}：{}",
+                with_program(&stdout_reason, program)
+            )),
+            None,
+        );
+    }
+    // Non-zero exit with unusable stdout: the stderr summary is the reason.
+    let stderr_summary = summarize_cli_text(stderr);
+    let reason = if stderr_summary.is_empty() {
+        stdout_reason
+    } else {
+        stderr_summary
+    };
+    response(
+        "not_running",
+        manuals_only(manuals),
+        Some(format!(
+            "{MSG_NOT_RUNNING}：{}",
+            with_program(&reason, program)
+        )),
+        None,
+    )
+}
+
+fn classify_stdout(stdout: &str, err: &ParseError) -> String {
+    if stdout.trim().is_empty() {
+        return "输出为空".to_string();
+    }
+    let trimmed = stdout.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return err.message.clone();
+    }
+    let bytes = stdout.as_bytes();
+    let shown = bytes.len().min(200);
+    let prefix = String::from_utf8_lossy(&bytes[..shown]);
+    let sanitized = summarize_cli_text(&prefix);
+    if sanitized.is_empty() {
+        format!("输出不是 JSON（前 {shown} 字节已脱敏）")
+    } else {
+        format!("输出不是 JSON（前 {shown} 字节已脱敏）：{sanitized}")
     }
 }
 
 fn from_status(status: TailnetStatus, manuals: &[ManualHost]) -> ListHostsResponse {
     let hosts = merge_hosts(&status.peers, manuals);
     let self_name = status.self_name;
+    let skipped = skip_note(status.skipped_peers);
     match status.backend_state.as_str() {
-        "Running" => response("ok", hosts, None, self_name),
+        "Running" => response("ok", hosts, skipped, self_name),
         "NeedsLogin" | "NoState" => response(
             "needs_login",
             hosts,
-            Some(MSG_NEEDS_LOGIN.to_string()),
+            Some(join_note(MSG_NEEDS_LOGIN, skipped)),
             self_name,
         ),
         "Stopped" => response(
             "not_running",
             hosts,
-            Some(MSG_NOT_RUNNING.to_string()),
+            Some(join_note(MSG_NOT_RUNNING, skipped)),
             self_name,
         ),
         _ => response(
             "error",
             hosts,
-            Some(MSG_UNKNOWN_STATE.to_string()),
+            Some(join_note(MSG_UNKNOWN_STATE, skipped)),
             self_name,
         ),
+    }
+}
+
+fn skip_note(skipped: usize) -> Option<String> {
+    if skipped == 0 {
+        None
+    } else {
+        Some(format!("已忽略 {skipped} 个无法解析的节点"))
+    }
+}
+
+fn join_note(base: &str, note: Option<String>) -> String {
+    match note {
+        Some(note) => format!("{base}；{note}"),
+        None => base.to_string(),
     }
 }
 
@@ -271,6 +368,8 @@ mod tests {
         RunOutput::Finished {
             code: Some(code),
             stdout: json.to_string(),
+            stderr: String::new(),
+            program: String::new(),
         }
     }
 
@@ -364,7 +463,14 @@ mod tests {
         let manuals = vec![manual("manual-1", "Lab", "host-a", 22)];
         let listed = compose_list(&RunOutput::NotInstalled, &manuals);
         assert_eq!(listed.status, "not_installed");
-        assert_eq!(listed.message.as_deref(), Some(MSG_NOT_INSTALLED));
+        let message = listed.message.expect("not installed message");
+        assert!(message.contains("未检测到 Tailscale"), "{message}");
+        assert!(message.contains("仅显示手动添加的服务器"), "{message}");
+        for place in TAILSCALE_SEARCH_DISPLAY {
+            assert!(message.contains(place), "{message} missing {place}");
+        }
+        assert!(!message.contains("/Users/"), "{message}");
+        assert!(!message.contains("/home/"), "{message}");
         assert_eq!(listed.self_name, None);
         assert_eq!(listed.hosts.len(), 1);
         assert_eq!(listed.hosts[0].source, "manual");
@@ -413,13 +519,24 @@ mod tests {
     #[test]
     fn timeout_and_bad_json_are_errors_and_keep_manuals() {
         let manuals = vec![manual("manual-1", "Lab", "100.64.0.9", 22)];
-        let timed_out = compose_list(&RunOutput::TimedOut, &manuals);
+        let timed_out = compose_list(
+            &RunOutput::TimedOut {
+                program: String::new(),
+            },
+            &manuals,
+        );
         assert_eq!(timed_out.status, "error");
         assert_eq!(timed_out.message.as_deref(), Some(MSG_TIMEOUT));
         assert_eq!(timed_out.hosts.len(), 1);
         assert_eq!(timed_out.hosts[0].ip.as_deref(), Some("100.64.0.9"));
 
-        let failed = compose_list(&RunOutput::Failed, &manuals);
+        let failed = compose_list(
+            &RunOutput::Failed {
+                program: String::new(),
+                detail: String::new(),
+            },
+            &manuals,
+        );
         assert_eq!(failed.status, "error");
         assert_eq!(failed.message.as_deref(), Some(MSG_EXEC));
         assert_eq!(failed.hosts[0].source, "manual");
@@ -429,7 +546,13 @@ mod tests {
             &manuals,
         );
         assert_eq!(malformed.status, "error");
-        assert_eq!(malformed.message.as_deref(), Some(MSG_PARSE));
+        let message = malformed.message.expect("parse message");
+        assert!(message.starts_with(MSG_PARSE), "{message}");
+        assert!(message.contains('：'), "{message}");
+        assert!(
+            message.contains("line") || message.contains("行"),
+            "{message}"
+        );
         assert_eq!(malformed.hosts.len(), 1);
     }
 
@@ -454,6 +577,47 @@ mod tests {
             "host-a.example-tailnet.ts.net"
         );
         assert_eq!(json["hosts"][0]["source"], "tailscale");
+    }
+
+    #[test]
+    fn bad_peer_is_skipped_and_running_stays_ok() {
+        let json = r#"{
+            "BackendState":"Running",
+            "Self":{"HostName":"example-self","TailscaleIPs":null},
+            "Peer":{
+                "good":{"HostName":"example-host-a","DNSName":"example-host-a.example.ts.net.","Online":true,"TailscaleIPs":null},
+                "bad":{"HostName":1}
+            }
+        }"#;
+        let listed = compose_list(&finished(json, 0), &[]);
+        assert_eq!(listed.status, "ok");
+        assert_eq!(listed.self_name.as_deref(), Some("example-self"));
+        assert_eq!(listed.hosts.len(), 1);
+        assert_eq!(listed.message.as_deref(), Some("已忽略 1 个无法解析的节点"));
+    }
+
+    #[test]
+    fn nonzero_exit_with_json_uses_backend_state_before_stderr() {
+        let RunOutput::Finished {
+            code,
+            stdout,
+            program,
+            ..
+        } = finished(include_str!("../../fixtures/needs_login.json"), 1)
+        else {
+            panic!("finished helper");
+        };
+        let listed = compose_list(
+            &RunOutput::Finished {
+                code,
+                stdout,
+                stderr: "failed to connect to local tailscaled".into(),
+                program,
+            },
+            &[],
+        );
+        assert_eq!(listed.status, "needs_login");
+        assert_eq!(listed.message.as_deref(), Some(MSG_NEEDS_LOGIN));
     }
 
     #[test]
@@ -510,6 +674,8 @@ mod triage_tailscale_parse {
         let out = RunOutput::Finished {
             code: Some(0),
             stdout: String::new(),
+            stderr: String::new(),
+            program: String::new(),
         };
         let msg = compose_list(&out, &[]).message.unwrap_or_default();
         assert_ne!(msg, MSG_PARSE, "需带具体原因，如『输出为空』");
@@ -520,6 +686,8 @@ mod triage_tailscale_parse {
         let out = RunOutput::Finished {
             code: Some(0),
             stdout: "{\"BackendState\": ".into(),
+            stderr: String::new(),
+            program: String::new(),
         };
         let msg = compose_list(&out, &[]).message.unwrap_or_default();
         assert!(msg.contains("line") || msg.contains("行"), "msg={msg}");
@@ -622,6 +790,8 @@ mod triage_tailscale_parse {
         let out = RunOutput::Finished {
             code: Some(0),
             stdout: "The Tailscale GUI failed to start: placeholder reason\n".into(),
+            stderr: String::new(),
+            program: String::new(),
         };
         let msg = compose_list(&out, &[]).message.unwrap_or_default();
         assert!(
