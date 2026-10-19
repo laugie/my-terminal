@@ -3,31 +3,30 @@ mod list;
 mod parse;
 mod store;
 
+use std::path::Path;
 use std::sync::Mutex;
 
 pub use exec::tailscale_status;
 pub use list::{compose_list, HostEntry, ListHostsResponse};
 pub use parse::{parse_status, ParseError, TailnetStatus};
-pub use store::{HostStore, ManualHost, MemoryHostStore};
+pub use store::{validate_manual_input, HostStore, ManualHost, MemoryHostStore, NewManualHost};
 
+use crate::config::JsonHostStore;
 use list::compose_list as build_list;
-use store::{validate_manual_input, NewManualHost};
 
-/// Process-local manual servers. Nothing here is written to disk.
+/// Manual servers loaded from the local JSON config.
 pub struct HostState {
-    store: Mutex<MemoryHostStore>,
-}
-
-impl Default for HostState {
-    fn default() -> Self {
-        Self {
-            store: Mutex::new(MemoryHostStore::new()),
-        }
-    }
+    store: Mutex<JsonHostStore>,
 }
 
 impl HostState {
-    fn with_store<T>(&self, f: impl FnOnce(&mut MemoryHostStore) -> T) -> Result<T, String> {
+    pub fn open(dir: &Path) -> Self {
+        Self {
+            store: Mutex::new(JsonHostStore::open(dir)),
+        }
+    }
+
+    fn with_store<T>(&self, f: impl FnOnce(&mut JsonHostStore) -> T) -> Result<T, String> {
         let mut guard = self
             .store
             .lock()
@@ -42,14 +41,19 @@ impl HostState {
 /// held across the await. The process itself runs on a blocking thread.
 #[tauri::command]
 pub async fn list_hosts(state: tauri::State<'_, HostState>) -> Result<ListHostsResponse, String> {
-    let manuals = state.with_store(|store| store.list())?;
+    let (manuals, notice) = state.with_store(|store| {
+        let notice = store.notice().map(ToOwned::to_owned);
+        (store.list(), notice)
+    })?;
     let output = tauri::async_runtime::spawn_blocking(tailscale_status)
         .await
         .map_err(|_| "读取 Tailscale 状态失败".to_string())?;
-    Ok(build_list(&output, &manuals))
+    let mut listed = build_list(&output, &manuals);
+    listed.config_notice = notice;
+    Ok(listed)
 }
 
-/// Validate and remember a manual server until the process exits.
+/// Validate, remember, and immediately save a manual server.
 #[tauri::command]
 pub fn add_manual_host(
     state: tauri::State<'_, HostState>,
@@ -59,7 +63,7 @@ pub fn add_manual_host(
     port: Option<u32>,
 ) -> Result<ManualHost, String> {
     let validated: NewManualHost = validate_manual_input(&name, &host, user.as_deref(), port)?;
-    state.with_store(|store| store.add(validated))
+    state.with_store(|store| store.add(validated))?
 }
 
 /// Drop a manual server by the id returned when it was added.
