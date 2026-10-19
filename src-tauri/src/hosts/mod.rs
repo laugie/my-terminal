@@ -37,10 +37,16 @@ impl HostState {
 }
 
 /// Read Tailscale once and merge the result with manual servers.
+///
+/// Manual servers are cloned before the CLI runs, so the store lock is not
+/// held across the await. The process itself runs on a blocking thread.
 #[tauri::command]
-pub fn list_hosts(state: tauri::State<'_, HostState>) -> Result<ListHostsResponse, String> {
+pub async fn list_hosts(state: tauri::State<'_, HostState>) -> Result<ListHostsResponse, String> {
     let manuals = state.with_store(|store| store.list())?;
-    Ok(build_list(&tailscale_status(), &manuals))
+    let output = tauri::async_runtime::spawn_blocking(tailscale_status)
+        .await
+        .map_err(|_| "读取 Tailscale 状态失败".to_string())?;
+    Ok(build_list(&output, &manuals))
 }
 
 /// Validate and remember a manual server until the process exits.

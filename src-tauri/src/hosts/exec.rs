@@ -108,6 +108,7 @@ pub(crate) fn run_command(program: &Path, args: &[&str], timeout: Duration) -> R
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(_) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
                 return RunOutput::Failed;
