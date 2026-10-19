@@ -10,9 +10,13 @@ import {
   writeSession,
   type SessionEvent,
 } from "./session.ts";
+import { splitWriteChunks } from "./write-chunks.ts";
+import { WriteQueue } from "./write-queue.ts";
 
-/** Matches the backend `write_session` limit. Larger pastes are split below it. */
-const MAX_WRITE_BYTES = 64 * 1024;
+/** Ended tabs count. The backend limit only covers live processes. */
+const MAX_TABS = 8;
+
+export const TAB_LIMIT_MESSAGE = "最多 8 个标签";
 
 /** Extra time after Exit before the process is reaped, so a late chunk can land. */
 const EXIT_REAP_DELAY_MS = 300;
@@ -24,7 +28,10 @@ interface Tab {
   phase: Phase;
   sessionId: string;
   generation: number;
-  pendingInput: string[];
+  /** Each entry is one keystroke or paste, already split into write-sized chunks. */
+  pendingWrites: string[][];
+  queue: WriteQueue;
+  error: string;
   term: Terminal;
   fit: FitAddon;
   view: HTMLElement;
@@ -37,6 +44,7 @@ interface Tab {
 export interface TerminalPanel {
   connect(host: HostEntry): Promise<void>;
   activeHostId(): string | null;
+  canOpenTab(): boolean;
 }
 
 export function mountTerminal(
@@ -76,7 +84,6 @@ export function mountTerminal(
   const tabs: Tab[] = [];
   let active: Tab | null = null;
   let resizeFrame = 0;
-  let suppressPaste = false;
 
   reconnect.addEventListener("click", () => {
     if (active && active.phase === "ended") {
@@ -92,6 +99,10 @@ export function mountTerminal(
   refreshChrome();
 
   async function connect(host: HostEntry): Promise<void> {
+    if (tabs.length >= MAX_TABS) {
+      sessionError.textContent = TAB_LIMIT_MESSAGE;
+      return;
+    }
     sessionError.textContent = "";
     const tab = createTab(host);
     activate(tab);
@@ -130,7 +141,9 @@ export function mountTerminal(
       phase: "connecting",
       sessionId: "",
       generation: 0,
-      pendingInput: [],
+      pendingWrites: [],
+      queue: new WriteQueue(),
+      error: "",
       term,
       fit,
       view,
@@ -154,34 +167,10 @@ export function mountTerminal(
       event.stopPropagation();
       requestClose(tab);
     });
+    // xterm stops the paste event and feeds the whole clipboard string through
+    // onData. Chunk on this path so a menu paste stays within the write limit.
     term.onData((data) => {
-      if (tab.phase === "ended") {
-        return;
-      }
-      if (tab.sessionId === "") {
-        tab.pendingInput.push(data);
-        return;
-      }
-      const id = tab.sessionId;
-      void writeSession(id, data).catch((err: unknown) => {
-        if (tab.phase === "ended" || tab.sessionId !== id) {
-          return;
-        }
-        sessionError.textContent = errorText(err);
-      });
-    });
-    view.addEventListener("paste", (event) => {
-      if (suppressPaste || active !== tab) {
-        if (suppressPaste) {
-          event.preventDefault();
-        }
-        return;
-      }
-      event.preventDefault();
-      const text = event.clipboardData?.getData("text/plain") ?? "";
-      void writeText(tab, text).catch((err: unknown) => {
-        sessionError.textContent = errorText(err);
-      });
+      submitInput(tab, data);
     });
 
     // Open only while this view is the one on screen. Fit happens later, and
@@ -198,11 +187,13 @@ export function mountTerminal(
 
   async function openOnTab(tab: Tab, keepBuffer: boolean): Promise<void> {
     const myGeneration = ++tab.generation;
+    tab.queue.invalidate();
     window.clearTimeout(tab.reapTimer);
     tab.reapTimer = 0;
     tab.phase = "connecting";
     tab.sessionId = "";
-    tab.pendingInput = [];
+    tab.pendingWrites = [];
+    clearTabError(tab);
     if (!keepBuffer) {
       tab.term.reset();
     }
@@ -221,16 +212,19 @@ export function mountTerminal(
       }
       tab.sessionId = opened.id;
       if (phaseOf(tab) === "ended") {
+        tab.pendingWrites = [];
+        tab.queue.invalidate();
         scheduleReap(tab, opened.id, myGeneration);
         return;
       }
       tab.phase = "live";
-      const queued = tab.pendingInput.splice(0, tab.pendingInput.length);
-      for (const data of queued) {
-        if (tab.phase !== "live" || tab.generation !== myGeneration) {
+      // Flush before any later await so newer onData cannot jump the queue.
+      const queued = tab.pendingWrites.splice(0, tab.pendingWrites.length);
+      for (const chunks of queued) {
+        if (tab.generation !== myGeneration || phaseOf(tab) !== "live") {
           break;
         }
-        await writeSession(opened.id, data);
+        enqueueChunks(tab, chunks);
       }
       refreshChrome();
       onChange();
@@ -242,14 +236,16 @@ export function mountTerminal(
       if (tab.generation !== myGeneration) {
         return;
       }
-      sessionError.textContent = errorText(err);
-      tab.pendingInput = [];
+      tab.pendingWrites = [];
+      const message = errorText(err);
       if (keepBuffer) {
         tab.phase = "ended";
+        showTabError(tab, message);
         refreshChrome();
         onChange();
       } else {
         removeTab(tab);
+        sessionError.textContent = message;
       }
     }
   }
@@ -265,7 +261,8 @@ export function mountTerminal(
     const codeText = event.code === null ? "未知" : String(event.code);
     tab.term.write(`\r\n[会话已结束，退出码 ${codeText}]\r\n`);
     tab.phase = "ended";
-    tab.pendingInput = [];
+    tab.pendingWrites = [];
+    tab.queue.invalidate();
     refreshChrome();
     onChange();
     if (tab.sessionId !== "") {
@@ -284,7 +281,7 @@ export function mountTerminal(
         if (tab.generation !== generation) {
           return;
         }
-        sessionError.textContent = errorText(err);
+        showTabError(tab, errorText(err));
       });
     }, EXIT_REAP_DELAY_MS);
   }
@@ -293,6 +290,8 @@ export function mountTerminal(
     if (tab.phase !== "ended") {
       return;
     }
+    tab.queue.invalidate();
+    tab.pendingWrites = [];
     window.clearTimeout(tab.reapTimer);
     tab.reapTimer = 0;
     const oldId = tab.sessionId;
@@ -315,6 +314,8 @@ export function mountTerminal(
     }
     const id = tab.sessionId;
     tab.generation += 1;
+    tab.queue.invalidate();
+    tab.pendingWrites = [];
     window.clearTimeout(tab.reapTimer);
     removeTab(tab);
     if (id !== "") {
@@ -357,6 +358,13 @@ export function mountTerminal(
     refreshTitles();
     refreshChrome();
     onChange();
+    const keepLimitNotice =
+      tab.error === "" &&
+      tabs.length >= MAX_TABS &&
+      sessionError.textContent === TAB_LIMIT_MESSAGE;
+    if (!keepLimitNotice) {
+      sessionError.textContent = tab.error;
+    }
     scheduleFit();
     if (tab.phase !== "ended") {
       tab.term.focus();
@@ -388,6 +396,12 @@ export function mountTerminal(
       tab.endedMark.hidden = !ended;
     }
     reconnect.hidden = active?.phase !== "ended";
+    const atLimit = tabs.length >= MAX_TABS;
+    newTab.disabled = atLimit;
+    newTab.title = atLimit ? TAB_LIMIT_MESSAGE : "";
+    if (!atLimit && sessionError.textContent === TAB_LIMIT_MESSAGE) {
+      sessionError.textContent = active?.error ?? "";
+    }
   }
 
   function scheduleFit(): void {
@@ -420,7 +434,7 @@ export function mountTerminal(
       if (tab.phase !== "live" || tab.sessionId !== id) {
         return;
       }
-      sessionError.textContent = errorText(err);
+      showTabError(tab, errorText(err));
     });
   }
 
@@ -467,6 +481,10 @@ export function mountTerminal(
     switch (event.key.toUpperCase()) {
       case "T":
         consume(event);
+        if (tabs.length >= MAX_TABS) {
+          sessionError.textContent = TAB_LIMIT_MESSAGE;
+          break;
+        }
         focusHostList();
         break;
       case "W":
@@ -485,14 +503,9 @@ export function mountTerminal(
         consume(event);
         if (active) {
           const tab = active;
-          suppressPaste = true;
-          void pasteClipboard(tab)
-            .catch((err: unknown) => {
-              sessionError.textContent = errorText(err);
-            })
-            .finally(() => {
-              suppressPaste = false;
-            });
+          void pasteClipboard(tab).catch((err: unknown) => {
+            showTabError(tab, errorText(err));
+          });
         }
         break;
       default:
@@ -515,27 +528,68 @@ export function mountTerminal(
   }
 
   async function pasteClipboard(tab: Tab): Promise<void> {
+    if (phaseOf(tab) === "ended") {
+      return;
+    }
+    const generation = tab.generation;
     if (!navigator.clipboard?.readText) {
       throw new Error("无法读取剪贴板");
     }
     const text = await navigator.clipboard.readText();
-    await writeText(tab, text);
+    if (tab.generation !== generation || phaseOf(tab) === "ended") {
+      return;
+    }
+    submitInput(tab, text);
   }
 
-  async function writeText(tab: Tab, text: string): Promise<void> {
+  function submitInput(tab: Tab, text: string): void {
     if (phaseOf(tab) === "ended" || text === "") {
       return;
     }
-    for (const chunk of splitWriteChunks(text)) {
-      if (phaseOf(tab) === "ended") {
-        return;
-      }
-      if (tab.sessionId === "") {
-        tab.pendingInput.push(chunk);
-        continue;
-      }
-      const id = tab.sessionId;
-      await writeSession(id, chunk);
+    const chunks = splitWriteChunks(text);
+    if (chunks.length === 0) {
+      return;
+    }
+    clearTabError(tab);
+    if (tab.sessionId === "") {
+      tab.pendingWrites.push(chunks);
+      return;
+    }
+    enqueueChunks(tab, chunks);
+  }
+
+  function enqueueChunks(tab: Tab, chunks: readonly string[]): void {
+    const generation = tab.generation;
+    const id = tab.sessionId;
+    void tab.queue.enqueue(
+      chunks,
+      async (chunk) => {
+        if (generation !== tab.generation || tab.sessionId !== id || phaseOf(tab) === "ended") {
+          return;
+        }
+        await writeSession(id, chunk);
+      },
+      (error) => {
+        if (generation !== tab.generation || tab.sessionId !== id) {
+          return;
+        }
+        showTabError(tab, errorText(error));
+      },
+    );
+  }
+
+  function showTabError(tab: Tab, message: string): void {
+    tab.error = message;
+    if (active === tab) {
+      sessionError.textContent = message;
+    }
+  }
+
+  function clearTabError(tab: Tab): void {
+    const previous = tab.error;
+    tab.error = "";
+    if (active === tab && sessionError.textContent === previous) {
+      sessionError.textContent = "";
     }
   }
 
@@ -560,33 +614,12 @@ export function mountTerminal(
   return {
     connect,
     activeHostId: () => active?.host.id ?? null,
+    canOpenTab: () => tabs.length < MAX_TABS,
   };
 }
 
 function phaseOf(tab: Tab): Phase {
   return tab.phase;
-}
-
-function splitWriteChunks(text: string): string[] {
-  const encoded = new TextEncoder().encode(text);
-  if (encoded.length <= MAX_WRITE_BYTES) {
-    return [text];
-  }
-  const chunks: string[] = [];
-  const decoder = new TextDecoder();
-  let offset = 0;
-  while (offset < encoded.length) {
-    let end = Math.min(offset + MAX_WRITE_BYTES, encoded.length);
-    while (end > offset && (encoded[end] & 0xc0) === 0x80) {
-      end -= 1;
-    }
-    if (end === offset) {
-      end = Math.min(offset + MAX_WRITE_BYTES, encoded.length);
-    }
-    chunks.push(decoder.decode(encoded.subarray(offset, end)));
-    offset = end;
-  }
-  return chunks;
 }
 
 function isMacPlatform(): boolean {

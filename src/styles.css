@@ -110,6 +110,15 @@ body {
   border-color: #2f7a5a;
 }
 
+.host-open-disabled {
+  cursor: default;
+}
+
+.host-open-disabled .button:not(.ghost) {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .empty {
   padding: 16px 12px;
   color: #9a9a9a;

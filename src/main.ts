@@ -6,7 +6,7 @@ import {
   type HostEntry,
   type ListHostsResponse,
 } from "./hosts.ts";
-import { mountTerminal } from "./terminal.ts";
+import { TAB_LIMIT_MESSAGE, mountTerminal } from "./terminal.ts";
 
 const app = document.querySelector("#app");
 if (!(app instanceof HTMLElement)) {
@@ -170,8 +170,11 @@ function render(result: ListHostsResponse): void {
 
 function refreshActiveHost(): void {
   const activeId = terminal.activeHostId();
+  const canOpen = terminal.canOpenTab();
   for (const item of list.querySelectorAll<HTMLLIElement>(".host")) {
     item.classList.toggle("host-active", item.dataset.hostId === activeId);
+    item.classList.toggle("host-open-disabled", !canOpen);
+    item.title = canOpen ? "" : TAB_LIMIT_MESSAGE;
   }
 }
 
@@ -180,6 +183,10 @@ function renderHost(host: HostEntry): HTMLLIElement {
   item.dataset.hostId = host.id;
   if (host.id === terminal.activeHostId()) {
     item.classList.add("host-active");
+  }
+  if (!terminal.canOpenTab()) {
+    item.classList.add("host-open-disabled");
+    item.title = TAB_LIMIT_MESSAGE;
   }
   item.addEventListener("click", (event) => {
     const target = event.target;
