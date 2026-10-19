@@ -6,6 +6,8 @@ mod store;
 use std::path::Path;
 use std::sync::Mutex;
 
+use tauri::Manager;
+
 pub use exec::tailscale_status;
 pub use list::{compose_list, HostEntry, ListHostsResponse};
 pub use parse::{parse_status, ParseError, TailnetStatus};
@@ -54,20 +56,36 @@ pub async fn list_hosts(state: tauri::State<'_, HostState>) -> Result<ListHostsR
 }
 
 /// Validate, remember, and immediately save a manual server.
+///
+/// 碰磁盘或外部进程的 Tauri 命令一律 async，避免阻塞主线程。
+/// 写盘放在 `spawn_blocking` 里；锁只在该闭包内持有，不跨 `.await`。
 #[tauri::command]
-pub fn add_manual_host(
-    state: tauri::State<'_, HostState>,
+pub async fn add_manual_host(
+    app: tauri::AppHandle,
     name: String,
     host: String,
     user: Option<String>,
     port: Option<u32>,
 ) -> Result<ManualHost, String> {
-    let validated: NewManualHost = validate_manual_input(&name, &host, user.as_deref(), port)?;
-    state.with_store(|store| store.add(validated))?
+    let validated = validate_manual_input(&name, &host, user.as_deref(), port)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<HostState>();
+        state.with_store(|store| store.add(validated))?
+    })
+    .await
+    .map_err(|_| "保存服务器失败".to_string())?
 }
 
 /// Drop a manual server by the id returned when it was added.
+///
+/// 碰磁盘或外部进程的 Tauri 命令一律 async，避免阻塞主线程。
+/// 写盘放在 `spawn_blocking` 里；锁只在该闭包内持有，不跨 `.await`。
 #[tauri::command]
-pub fn remove_manual_host(state: tauri::State<'_, HostState>, id: String) -> Result<(), String> {
-    state.with_store(|store| store.remove(&id))?
+pub async fn remove_manual_host(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<HostState>();
+        state.with_store(|store| store.remove(&id))?
+    })
+    .await
+    .map_err(|_| "移除服务器失败".to_string())?
 }
