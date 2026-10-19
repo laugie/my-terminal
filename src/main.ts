@@ -6,6 +6,7 @@ import {
   type HostEntry,
   type ListHostsResponse,
 } from "./hosts.ts";
+import { mountTerminal } from "./terminal.ts";
 
 const app = document.querySelector("#app");
 if (!(app instanceof HTMLElement)) {
@@ -48,7 +49,13 @@ const formError = el("p", "form-error");
 formError.setAttribute("role", "alert");
 formSection.append(formTitle, form, formError);
 
-app.append(header, statusBar, list, formSection);
+const terminalPanel = el("section", "terminal-panel");
+terminalPanel.hidden = true;
+app.append(header, statusBar, list, terminalPanel, formSection);
+
+const terminal = mountTerminal(terminalPanel, () => {
+  refreshActiveHost();
+});
 
 let refreshGeneration = 0;
 
@@ -155,8 +162,26 @@ function render(result: ListHostsResponse): void {
   }
 }
 
+function refreshActiveHost(): void {
+  const activeId = terminal.activeHostId();
+  for (const item of list.querySelectorAll<HTMLLIElement>(".host")) {
+    item.classList.toggle("host-active", item.dataset.hostId === activeId);
+  }
+}
+
 function renderHost(host: HostEntry): HTMLLIElement {
   const item = el("li", "host");
+  item.dataset.hostId = host.id;
+  if (host.id === terminal.activeHostId()) {
+    item.classList.add("host-active");
+  }
+  item.addEventListener("click", (event) => {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest("[data-action='remove']")) {
+      return;
+    }
+    void terminal.connect(host);
+  });
   const main = el("div", "host-main");
   const dot = el("span", host.online === true ? "dot online" : "dot offline");
   dot.setAttribute("aria-label", host.online === true ? "在线" : "离线");
@@ -171,12 +196,20 @@ function renderHost(host: HostEntry): HTMLLIElement {
   tag.textContent = sourceLabel(host.source);
   meta.append(address, tag);
 
+  const connect = document.createElement("button");
+  connect.type = "button";
+  connect.className = "button";
+  connect.textContent = "连接";
+  meta.append(connect);
+
   if (host.source === "manual" || host.source === "tailscale+manual") {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "button ghost";
+    remove.dataset.action = "remove";
     remove.textContent = "移除";
-    remove.addEventListener("click", () => {
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
       void onRemove(host.id);
     });
     meta.append(remove);

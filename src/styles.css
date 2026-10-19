@@ -9,7 +9,7 @@ body {
 
 #app {
   box-sizing: border-box;
-  max-width: 720px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 24px 20px 40px;
 }
@@ -103,6 +103,11 @@ body {
   justify-content: space-between;
   gap: 12px;
   padding: 12px;
+  cursor: pointer;
+}
+
+.host-active {
+  border-color: #2f7a5a;
 }
 
 .empty {
@@ -196,6 +201,47 @@ body {
   min-height: 1.2em;
   margin: 8px 0 0;
   color: #f0a0a0;
+}
+
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 24px;
+}
+
+.terminal-panel[hidden] {
+  display: none;
+}
+
+.terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.terminal-label {
+  font-weight: 600;
+}
+
+.terminal-target {
+  color: #bdbdbd;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-view {
+  height: min(52vh, 480px);
+  min-height: 220px;
+  box-sizing: border-box;
+  border: 1px solid #333;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  padding: 4px;
 }
 
 @media (max-width: 640px) {

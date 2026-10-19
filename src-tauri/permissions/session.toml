@@ -1,0 +1,19 @@
+[[permission]]
+identifier = "allow-open-session"
+description = "Enables the open_session command without any pre-configured scope."
+commands.allow = ["open_session"]
+
+[[permission]]
+identifier = "allow-write-session"
+description = "Enables the write_session command without any pre-configured scope."
+commands.allow = ["write_session"]
+
+[[permission]]
+identifier = "allow-resize-session"
+description = "Enables the resize_session command without any pre-configured scope."
+commands.allow = ["resize_session"]
+
+[[permission]]
+identifier = "allow-close-session"
+description = "Enables the close_session command without any pre-configured scope."
+commands.allow = ["close_session"]

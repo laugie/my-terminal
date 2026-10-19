@@ -8,6 +8,7 @@
 - Tauri 2 项目骨架，以及 macOS（arm64 .dmg）/ Windows（NSIS .exe）构建 CI。
 - 服务器列表：解析 `tailscale status --json`（机器名、IP、在线状态），并支持在内存中手动添加服务器。
 - 本地 JSON 配置：手动服务器写入 `config.json`（macOS `~/Library/Application Support/my-terminal/`，Windows `%APPDATA%\my-terminal\`）。文件损坏时备份并恢复默认值；版本更高时只读加载；不保存密码或密钥。
+- 单个 PTY 会话：点击服务器后用系统 ssh 连接，在 xterm.js 中显示；同一时间只保留一个会话。
 
 ## [0.1.0] - 未发布
 ## [0.2.0] - 未发布
