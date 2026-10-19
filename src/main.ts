@@ -50,12 +50,18 @@ formError.setAttribute("role", "alert");
 formSection.append(formTitle, form, formError);
 
 const terminalPanel = el("section", "terminal-panel");
-terminalPanel.hidden = true;
 app.append(header, statusBar, list, terminalPanel, formSection);
 
-const terminal = mountTerminal(terminalPanel, () => {
-  refreshActiveHost();
-});
+const terminal = mountTerminal(
+  terminalPanel,
+  () => {
+    refreshActiveHost();
+  },
+  () => {
+    list.tabIndex = -1;
+    list.focus();
+  },
+);
 
 let refreshGeneration = 0;
 

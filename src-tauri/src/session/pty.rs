@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -19,12 +19,21 @@ const REAPER_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long release waits if a write or resize still holds the end.
 const END_LOCK_WAIT: Duration = Duration::from_millis(250);
 
+/// After the child exits, wait at most this long for the reader to finish
+/// sending the bytes already in the pipe. Windows ConPTY does not EOF until
+/// the writer and master are released; that release shares this deadline so
+/// a stuck read cannot bring back the shutdown hang.
+const READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
+
 type PtyWriter = Box<dyn std::io::Write + Send>;
 type PtyMaster = Box<dyn MasterPty + Send>;
 
 /// One running ssh process and the threads that move its output.
 pub struct LiveSession {
     pub id: String,
+    /// Set once the child has been waited on. Shutdown reports failure when
+    /// the reaper is detached before this happens.
+    pub reaped: Arc<AtomicBool>,
     /// `None` once shutdown has released the write end.
     pub writer: Arc<Mutex<Option<PtyWriter>>>,
     /// `None` once shutdown has released the master.
@@ -38,7 +47,12 @@ pub struct LiveSession {
 impl LiveSession {
     /// Stop the child, release the PTY ends, and wait until it is reaped.
     pub fn shutdown(mut self) -> Result<(), String> {
-        self.finish()
+        self.finish()?;
+        if self.reaped.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err("会话未回收".to_string())
+        }
     }
 
     fn finish(&mut self) -> Result<(), String> {
@@ -109,12 +123,14 @@ pub(crate) fn start_pty(
         .master
         .try_clone_reader()
         .map_err(|_| "无法读取终端输出".to_string())?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|_| "无法写入终端".to_string())?;
-    let master = pair.master;
+    let writer = Arc::new(Mutex::new(Some(
+        pair.master
+            .take_writer()
+            .map_err(|_| "无法写入终端".to_string())?,
+    )));
+    let master = Arc::new(Mutex::new(Some(pair.master)));
     drop(pair.slave);
+    let reaped = Arc::new(AtomicBool::new(false));
 
     let (event_tx, event_rx) = mpsc::channel();
     let reader_tx = event_tx.clone();
@@ -152,6 +168,9 @@ pub(crate) fn start_pty(
         mpsc::Sender<SessionEvent>,
     );
     let (boot_tx, boot_rx) = mpsc::channel::<Boot>();
+    let drain_writer = Arc::clone(&writer);
+    let drain_master = Arc::clone(&master);
+    let drain_reaped = Arc::clone(&reaped);
     let reaper = match thread::Builder::new()
         .name("pty-reaper".to_string())
         .spawn(move || {
@@ -159,11 +178,13 @@ pub(crate) fn start_pty(
                 return;
             };
             let code = wait_or_kill(child, kill_rx);
-            // Publish the exit before joining the reader. The reader blocks
-            // until the master and writer are dropped, which shutdown does
-            // only after this event has been queued.
+            drain_reaped.store(true, Ordering::SeqCst);
+            // Every Data send finishes inside the reader. Drain it before
+            // Exit so the channel cannot deliver the exit first. On Windows
+            // the drain releases the ConPTY ends; otherwise the read never
+            // sees EOF and the tail stays stuck behind this event.
+            drain_reader(reader_handle, &drain_writer, &drain_master);
             let _ = event_tx.send(SessionEvent::Exit { code });
-            let _ = reader_handle.join();
         }) {
         Ok(handle) => handle,
         Err(_) => {
@@ -212,8 +233,9 @@ pub(crate) fn start_pty(
     let id = format!("session-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
     Ok(LiveSession {
         id,
-        writer: Arc::new(Mutex::new(Some(writer))),
-        master: Arc::new(Mutex::new(Some(master))),
+        reaped,
+        writer,
+        master,
         kill_tx: Some(kill_tx),
         reaper: Some(reaper),
     })
@@ -222,22 +244,20 @@ pub(crate) fn start_pty(
 /// Take the PTY end out of the mutex and drop it.
 ///
 /// A blocking lock here can stall behind `write_all`. Give up after a short
-/// wait so the timed reaper join still runs.
+/// wait so the timed reaper join still runs. The value is dropped outside
+/// the mutex: `ClosePseudoConsole` must not run while the lock is held.
 fn take_end<T>(slot: &Mutex<Option<T>>) {
-    let deadline = Instant::now() + END_LOCK_WAIT;
+    drop(take_end_out_until(slot, Instant::now() + END_LOCK_WAIT));
+}
+
+fn take_end_out_until<T>(slot: &Mutex<Option<T>>, deadline: Instant) -> Option<T> {
     loop {
         match slot.try_lock() {
-            Ok(mut guard) => {
-                drop(guard.take());
-                return;
-            }
-            Err(TryLockError::Poisoned(poisoned)) => {
-                drop(poisoned.into_inner().take());
-                return;
-            }
+            Ok(mut guard) => return guard.take(),
+            Err(TryLockError::Poisoned(poisoned)) => return poisoned.into_inner().take(),
             Err(TryLockError::WouldBlock) => {
                 if Instant::now() >= deadline {
-                    return;
+                    return None;
                 }
                 thread::sleep(Duration::from_millis(10));
             }
@@ -245,8 +265,56 @@ fn take_end<T>(slot: &Mutex<Option<T>>) {
     }
 }
 
+/// Publish every byte the reader already has, then return.
+///
+/// Unix reaches EOF or EIO once the slave closes, so the reader is joined
+/// directly. Windows ConPTY does not EOF until the writer and the master are
+/// released; those drops run beside the reader and share one short deadline.
+fn drain_reader(
+    reader: JoinHandle<()>,
+    writer: &Mutex<Option<PtyWriter>>,
+    master: &Mutex<Option<PtyMaster>>,
+) {
+    let deadline = Instant::now() + READER_DRAIN_TIMEOUT;
+    #[cfg(windows)]
+    let release = {
+        let writer = take_end_out_until(writer, deadline);
+        let master = take_end_out_until(master, deadline);
+        thread::Builder::new()
+            .name("pty-release".to_string())
+            .spawn(move || {
+                drop(writer);
+                drop(master);
+            })
+            .ok()
+    };
+    #[cfg(not(windows))]
+    {
+        // Dropping the Unix writer injects VEOF and can block on a full
+        // buffer. The slave close is what unblocks this read.
+        let _ = (writer, master);
+    }
+
+    let remain = deadline.saturating_duration_since(Instant::now());
+    let _ = join_for(reader, remain);
+
+    #[cfg(windows)]
+    if let Some(handle) = release {
+        let remain = deadline.saturating_duration_since(Instant::now());
+        let _ = join_for(handle, remain);
+    }
+}
+
 /// Join `handle`, or detach it when it is still running after the timeout.
 fn join_with_timeout(handle: JoinHandle<()>) -> Result<(), String> {
+    join_for(handle, REAPER_JOIN_TIMEOUT)
+}
+
+fn join_for(handle: JoinHandle<()>, timeout: Duration) -> Result<(), String> {
+    if timeout.is_zero() {
+        drop(handle);
+        return Ok(());
+    }
     let (tx, rx) = mpsc::channel();
     let waiter = thread::Builder::new()
         .name("pty-join".to_string())
@@ -257,7 +325,7 @@ fn join_with_timeout(handle: JoinHandle<()>) -> Result<(), String> {
         // Spawn failed and dropped `handle`, which detaches that thread.
         return Ok(());
     };
-    match rx.recv_timeout(REAPER_JOIN_TIMEOUT) {
+    match rx.recv_timeout(timeout) {
         Ok(Ok(())) => {
             let _ = waiter.join();
             Ok(())

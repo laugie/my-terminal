@@ -4,7 +4,11 @@ mod io;
 mod pty;
 mod size;
 
+use std::collections::HashMap;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use pty::LiveSession;
 use tauri::Manager;
@@ -15,6 +19,12 @@ pub use size::{normalize_pty_size, MAX_PTY_COLS, MAX_PTY_ROWS};
 
 /// Largest payload accepted by one `write_session` call.
 const MAX_WRITE_BYTES: usize = 64 * 1024;
+
+/// Most sessions that may be starting or running at once.
+const MAX_TABS: usize = 8;
+
+/// `shutdown_blocking` releases every child together, then waits once.
+const SHUTDOWN_DEADLINE: Duration = Duration::from_millis(3500);
 
 /// Bytes or a terminal exit, delivered on the channel passed to `open_session`.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -31,18 +41,19 @@ pub struct OpenSessionResponse {
     pub id: String,
 }
 
+struct Pending {
+    id: String,
+    epoch: u64,
+}
+
 struct Inner {
-    generation: u64,
-    slot: Slot,
+    /// Bumped by `shutdown_blocking` so an in-flight open cannot install.
+    epoch: u64,
+    pending: Vec<Pending>,
+    sessions: HashMap<String, LiveSession>,
 }
 
-enum Slot {
-    Idle,
-    Starting,
-    Active(LiveSession),
-}
-
-/// Process-wide single-session table.
+/// Process-wide session table. At most [`MAX_TABS`] sessions may be in flight.
 pub struct SessionState {
     inner: Mutex<Inner>,
 }
@@ -51,8 +62,9 @@ impl SessionState {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(Inner {
-                generation: 0,
-                slot: Slot::Idle,
+                epoch: 0,
+                pending: Vec::new(),
+                sessions: HashMap::new(),
             }),
         }
     }
@@ -62,50 +74,46 @@ impl SessionState {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn begin(&self) -> Result<u64, String> {
+    fn begin(&self) -> Result<String, String> {
         let mut guard = self.lock();
-        if !matches!(guard.slot, Slot::Idle) {
-            return Err("已有会话正在进行".to_string());
+        if guard.pending.len() + guard.sessions.len() >= MAX_TABS {
+            return Err("最多 8 个标签".to_string());
         }
-        guard.generation = guard.generation.wrapping_add(1);
-        guard.slot = Slot::Starting;
-        Ok(guard.generation)
+        let id = next_session_id();
+        let epoch = guard.epoch;
+        guard.pending.push(Pending {
+            id: id.clone(),
+            epoch,
+        });
+        Ok(id)
     }
 
-    fn abort(&self, generation: u64) {
+    fn abort(&self, id: &str) {
         let mut guard = self.lock();
-        if guard.generation == generation && matches!(guard.slot, Slot::Starting) {
-            guard.slot = Slot::Idle;
-        }
+        guard.pending.retain(|pending| pending.id != id);
     }
 
     fn install(
         &self,
-        generation: u64,
-        session: LiveSession,
+        id: &str,
+        mut session: LiveSession,
     ) -> Result<OpenSessionResponse, LiveSession> {
         let mut guard = self.lock();
-        if guard.generation != generation || !matches!(guard.slot, Slot::Starting) {
+        let Some(index) = guard.pending.iter().position(|pending| pending.id == id) else {
+            return Err(session);
+        };
+        let pending = guard.pending.remove(index);
+        if pending.epoch != guard.epoch {
             return Err(session);
         }
-        let id = session.id.clone();
-        guard.slot = Slot::Active(session);
-        Ok(OpenSessionResponse { id })
+        session.id = id.to_string();
+        guard.sessions.insert(id.to_string(), session);
+        Ok(OpenSessionResponse { id: id.to_string() })
     }
 
     fn take(&self, id: &str) -> Result<Option<LiveSession>, String> {
         let mut guard = self.lock();
-        match &guard.slot {
-            Slot::Active(session) if session.id == id => {
-                guard.generation = guard.generation.wrapping_add(1);
-                match std::mem::replace(&mut guard.slot, Slot::Idle) {
-                    Slot::Active(session) => Ok(Some(session)),
-                    _ => Ok(None),
-                }
-            }
-            Slot::Active(_) => Err("会话不存在".to_string()),
-            _ => Ok(None),
-        }
+        Ok(guard.sessions.remove(id))
     }
 
     fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
@@ -114,9 +122,9 @@ impl SessionState {
         }
         let writer = {
             let guard = self.lock();
-            match &guard.slot {
-                Slot::Active(session) if session.id == id => Arc::clone(&session.writer),
-                _ => return Err("会话不存在".to_string()),
+            match guard.sessions.get(id) {
+                Some(session) => Arc::clone(&session.writer),
+                None => return Err("会话不存在".to_string()),
             }
         };
         let mut slot = writer.lock().unwrap_or_else(PoisonError::into_inner);
@@ -133,9 +141,9 @@ impl SessionState {
         let (cols, rows) = normalize_pty_size(cols, rows)?;
         let master = {
             let guard = self.lock();
-            match &guard.slot {
-                Slot::Active(session) if session.id == id => Arc::clone(&session.master),
-                _ => return Err("会话不存在".to_string()),
+            match guard.sessions.get(id) {
+                Some(session) => Arc::clone(&session.master),
+                None => return Err("会话不存在".to_string()),
             }
         };
         let slot = master.lock().unwrap_or_else(PoisonError::into_inner);
@@ -151,22 +159,81 @@ impl SessionState {
         Ok(())
     }
 
-    /// Kill the live child, if any, and wait until it has been reaped.
+    /// Kill every live child and wait until each has been reaped.
     ///
-    /// Also invalidates an in-flight `open_session` so it will not install
-    /// a process after the window has closed.
+    /// Also invalidates in-flight `open_session` calls so they will not
+    /// install a process after the window has closed. Children are signalled
+    /// together; one deadline covers the whole set.
     pub fn shutdown_blocking(&self) {
-        let session = {
+        let sessions = {
             let mut guard = self.lock();
-            guard.generation = guard.generation.wrapping_add(1);
-            match std::mem::replace(&mut guard.slot, Slot::Idle) {
-                Slot::Active(session) => Some(session),
-                _ => None,
-            }
+            guard.epoch = guard.epoch.wrapping_add(1);
+            guard.pending.clear();
+            std::mem::take(&mut guard.sessions)
         };
-        if let Some(session) = session {
-            let _ = session.shutdown();
+        shutdown_all(sessions.into_values().collect());
+    }
+
+    #[cfg(test)]
+    fn live_count(&self) -> usize {
+        self.lock().sessions.len()
+    }
+
+    #[cfg(test)]
+    fn pending_count(&self) -> usize {
+        self.lock().pending.len()
+    }
+}
+
+fn next_session_id() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    format!(
+        "session-{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
+/// Signal every session at once, then wait until `SHUTDOWN_DEADLINE`.
+fn shutdown_all(sessions: Vec<LiveSession>) {
+    if sessions.is_empty() {
+        return;
+    }
+    let mut handles = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        match thread::Builder::new()
+            .name("pty-shutdown".to_string())
+            .spawn(move || session.shutdown())
+        {
+            Ok(handle) => handles.push(handle),
+            Err(_) => {
+                // The session was dropped with the failed spawn, which reaps
+                // it on this thread. Keep going so the others still stop.
+            }
         }
+    }
+    let deadline = Instant::now() + SHUTDOWN_DEADLINE;
+    for handle in handles {
+        let remain = deadline.saturating_duration_since(Instant::now());
+        let _ = join_shutdown(handle, remain);
+    }
+}
+
+fn join_shutdown(handle: thread::JoinHandle<Result<(), String>>, timeout: Duration) {
+    if timeout.is_zero() {
+        drop(handle);
+        return;
+    }
+    let (tx, rx) = mpsc::channel();
+    let waiter = thread::Builder::new()
+        .name("pty-shutdown-wait".to_string())
+        .spawn(move || {
+            let _ = tx.send(handle.join());
+        });
+    let Ok(waiter) = waiter else {
+        return;
+    };
+    if rx.recv_timeout(timeout).is_ok() {
+        let _ = waiter.join();
     }
 }
 
@@ -178,22 +245,22 @@ impl Default for SessionState {
 
 struct Reservation {
     app: tauri::AppHandle,
-    generation: u64,
+    id: String,
     armed: bool,
 }
 
 impl Drop for Reservation {
     fn drop(&mut self) {
         if self.armed {
-            self.app.state::<SessionState>().abort(self.generation);
+            self.app.state::<SessionState>().abort(&self.id);
         }
     }
 }
 
-/// Start the single system ssh session.
+/// Start one system ssh session.
 ///
-/// 碰外部进程的命令一律 async。创建 PTY 与等待子进程都在阻塞线程里完成，
-/// 状态锁不跨 `.await` 持有。`JoinError` 转成错误，不 panic。
+/// 最多 8 个标签。碰外部进程的命令一律 async。创建 PTY 与等待子进程都在
+/// 阻塞线程里完成，状态锁不跨 `.await` 持有。`JoinError` 转成错误，不 panic。
 #[tauri::command]
 pub async fn open_session(
     app: tauri::AppHandle,
@@ -203,10 +270,10 @@ pub async fn open_session(
     on_event: tauri::ipc::Channel<SessionEvent>,
 ) -> Result<OpenSessionResponse, String> {
     let args = build_ssh_args(&SshTarget { host, user, port })?;
-    let generation = app.state::<SessionState>().begin()?;
+    let id = app.state::<SessionState>().begin()?;
     let mut reservation = Reservation {
         app: app.clone(),
-        generation,
+        id: id.clone(),
         armed: true,
     };
     let app_for_task = app.clone();
@@ -218,10 +285,7 @@ pub async fn open_session(
             })
         })();
         match started {
-            Ok(session) => match app_for_task
-                .state::<SessionState>()
-                .install(generation, session)
-            {
+            Ok(session) => match app_for_task.state::<SessionState>().install(&id, session) {
                 Ok(response) => Ok(response),
                 Err(session) => {
                     let _ = session.shutdown();
@@ -229,7 +293,7 @@ pub async fn open_session(
                 }
             },
             Err(err) => {
-                app_for_task.state::<SessionState>().abort(generation);
+                app_for_task.state::<SessionState>().abort(&id);
                 Err(err)
             }
         }
@@ -291,28 +355,221 @@ pub async fn close_session(app: tauri::AppHandle, id: String) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    struct ShutdownGuard<'a>(&'a SessionState);
+
+    impl Drop for ShutdownGuard<'_> {
+        fn drop(&mut self) {
+            self.0.shutdown_blocking();
+        }
+    }
 
     #[test]
-    fn a_second_begin_is_rejected_until_abort() {
+    fn abort_drops_a_reservation_and_missing_take_is_empty() {
         let state = SessionState::new();
         let first = state.begin().unwrap();
-        assert_eq!(state.begin().unwrap_err(), "已有会话正在进行");
-        state.abort(first);
         let second = state.begin().unwrap();
         assert_ne!(first, second);
+        state.abort(&first);
+        assert_eq!(state.pending_count(), 1);
         assert!(state.take("missing").unwrap().is_none());
+        state.shutdown_blocking();
+        assert_eq!(state.pending_count(), 0);
+        assert_eq!(state.live_count(), 0);
+    }
+
+    #[test]
+    fn three_begins_succeed_with_distinct_ids() {
+        let state = SessionState::new();
+        let first = state.begin().unwrap();
+        let second = state.begin().unwrap();
+        let third = state.begin().unwrap();
+        assert_ne!(first, second);
+        assert_ne!(first, third);
+        assert_ne!(second, third);
+        state.shutdown_blocking();
+        assert_eq!(state.pending_count(), 0);
+        assert_eq!(state.live_count(), 0);
+    }
+
+    #[test]
+    fn ninth_begin_returns_the_tab_limit_error() {
+        let state = SessionState::new();
+        let mut ids = Vec::new();
+        for _ in 0..MAX_TABS {
+            ids.push(state.begin().unwrap());
+        }
+        assert_eq!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            MAX_TABS
+        );
+        assert_eq!(state.begin().unwrap_err(), "最多 8 个标签");
+        state.shutdown_blocking();
     }
 
     #[test]
     fn shutdown_clears_a_reservation_so_another_session_can_start() {
         let state = SessionState::new();
-        let generation = state.begin().unwrap();
+        let first = state.begin().unwrap();
         state.shutdown_blocking();
         assert!(state.take("session-1").unwrap().is_none());
+        assert_eq!(state.pending_count(), 0);
         let next = state.begin().unwrap();
-        assert_ne!(generation, next);
-        assert_eq!(state.begin().unwrap_err(), "已有会话正在进行");
-        state.abort(next);
+        assert_ne!(first, next);
+        let another = state.begin().unwrap();
+        assert_ne!(next, another);
+        state.shutdown_blocking();
+    }
+
+    #[test]
+    fn closing_the_middle_of_three_sessions_keeps_the_others() {
+        let state = SessionState::new();
+        let _guard = ShutdownGuard(&state);
+        let first = spawn_resident(&state);
+        let middle = spawn_resident(&state);
+        let third = spawn_resident(&state);
+        assert_eq!(state.live_count(), 3);
+
+        let started = Instant::now();
+        let session = state
+            .take(&middle.id)
+            .unwrap()
+            .expect("middle session is installed");
+        session.shutdown().expect("middle shutdown");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "closing the middle session took {elapsed:?}"
+        );
+        assert!(
+            middle.reaped.load(Ordering::SeqCst),
+            "closed session was not reaped"
+        );
+        assert_eq!(state.live_count(), 2);
+        assert_eq!(
+            state.write(&middle.id, b"echo GONE\n").unwrap_err(),
+            "会话不存在"
+        );
+        state.resize(&first.id, 100, 30).expect("resize first");
+        assert!(state.resize(&middle.id, 80, 24).is_err());
+
+        expect_marker(&state, &first, "PONG-1");
+        expect_marker(&state, &third, "PONG-3");
+    }
+
+    #[test]
+    fn shutdown_blocking_reaps_all_sessions_within_the_deadline() {
+        let state = SessionState::new();
+        let _guard = ShutdownGuard(&state);
+        let sessions = vec![
+            spawn_resident(&state),
+            spawn_resident(&state),
+            spawn_resident(&state),
+        ];
+        assert_eq!(state.live_count(), 3);
+
+        let started = Instant::now();
+        state.shutdown_blocking();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed <= SHUTDOWN_DEADLINE,
+            "shutdown_blocking took {elapsed:?}"
+        );
+        assert_eq!(state.live_count(), 0);
+        assert_eq!(state.pending_count(), 0);
+        for session in &sessions {
+            assert!(
+                session.reaped.load(Ordering::SeqCst),
+                "session {} was not reaped",
+                session.id
+            );
+            assert_eq!(state.write(&session.id, b"x").unwrap_err(), "会话不存在");
+        }
+    }
+
+    struct Resident {
+        id: String,
+        rx: mpsc::Receiver<SessionEvent>,
+        reaped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    fn spawn_resident(state: &SessionState) -> Resident {
+        let id = state.begin().expect("begin");
+        let (tx, rx) = mpsc::channel();
+        let (program, args) = resident_program();
+        let session = pty::start_pty(&program, &args, move |event| tx.send(event).map_err(|_| ()))
+            .expect("start_pty");
+        let reaped = Arc::clone(&session.reaped);
+        state.install(&id, session).unwrap_or_else(|session| {
+            let _ = session.shutdown();
+            panic!("install {id}");
+        });
+        Resident { id, rx, reaped }
+    }
+
+    fn resident_program() -> (std::path::PathBuf, Vec<String>) {
+        if cfg!(windows) {
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+            (
+                std::path::PathBuf::from(root)
+                    .join("System32")
+                    .join("cmd.exe"),
+                Vec::new(),
+            )
+        } else {
+            (std::path::PathBuf::from("/bin/sh"), Vec::new())
+        }
+    }
+
+    fn expect_marker(state: &SessionState, resident: &Resident, marker: &str) {
+        let mut output = Vec::new();
+        let mut answered = false;
+        let prime = Instant::now() + Duration::from_millis(400);
+        while Instant::now() < prime {
+            pump(state, resident, &mut output, &mut answered);
+            thread::sleep(Duration::from_millis(20));
+        }
+        let line = if cfg!(windows) {
+            format!("echo {marker}\r\n")
+        } else {
+            format!("printf '{marker}\\n'\n")
+        };
+        state
+            .write(&resident.id, line.as_bytes())
+            .unwrap_or_else(|err| panic!("write {marker}: {err}"));
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            pump(state, resident, &mut output, &mut answered);
+            if String::from_utf8_lossy(&output).contains(marker) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "session {} did not show {marker}, output={:?}",
+            resident.id,
+            String::from_utf8_lossy(&output)
+        );
+    }
+
+    fn pump(state: &SessionState, resident: &Resident, output: &mut Vec<u8>, answered: &mut bool) {
+        while let Ok(event) = resident.rx.try_recv() {
+            match event {
+                SessionEvent::Data { bytes } => output.extend(bytes),
+                SessionEvent::Exit { code } => {
+                    panic!("session {} exited early: {code:?}", resident.id);
+                }
+            }
+        }
+        const QUERY: &[u8] = b"\x1b[6n";
+        if !*answered && output.windows(QUERY.len()).any(|window| window == QUERY) {
+            *answered = true;
+            state
+                .write(&resident.id, b"\x1b[1;1R")
+                .expect("cursor answer");
+        }
     }
 
     #[test]
