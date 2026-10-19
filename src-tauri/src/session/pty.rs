@@ -336,6 +336,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut output = Vec::new();
         let mut exit_code = None;
+        let mut answered_cursor = false;
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now());
             if remain.is_zero() {
@@ -346,6 +347,10 @@ mod tests {
                 Ok(SessionEvent::Exit { code }) => exit_code = Some(code),
                 Err(_) => break,
             }
+            // ConPTY asks for the cursor position and waits before the child
+            // prints or exits. xterm answers this in the app; the test must
+            // answer it on the PTY writer.
+            answer_cursor_query(&session, &output, &mut answered_cursor);
             if bytes_contain_hi(&output) && exit_code == Some(Some(3)) {
                 break;
             }
@@ -372,6 +377,21 @@ mod tests {
 
     fn bytes_contain_hi(output: &[u8]) -> bool {
         String::from_utf8_lossy(output).contains("hi")
+    }
+
+    fn answer_cursor_query(session: &LiveSession, output: &[u8], answered: &mut bool) {
+        const QUERY: &[u8] = b"\x1b[6n";
+        if *answered || output.windows(QUERY.len()).all(|window| window != QUERY) {
+            return;
+        }
+        *answered = true;
+        let mut slot = session.writer.lock().unwrap_or_else(|err| err.into_inner());
+        let Some(writer) = slot.as_mut() else {
+            return;
+        };
+        use std::io::Write;
+        let _ = writer.write_all(b"\x1b[1;1R");
+        let _ = writer.flush();
     }
 
     fn short_lived_program() -> (PathBuf, Vec<String>) {
