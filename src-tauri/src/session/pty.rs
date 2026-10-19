@@ -375,6 +375,62 @@ mod tests {
         );
     }
 
+    /// Exit must not overtake the child's last bytes.
+    ///
+    /// The reader is still forwarding when `wait` returns. Counting only
+    /// bytes that arrived before `Exit`, then shutting down immediately,
+    /// fails if the exit event is published first.
+    #[test]
+    fn exit_is_emitted_only_after_tail_error() {
+        let (program, args) = trailing_output_program();
+        let (tx, rx) = mpsc::channel();
+        let session = start_pty(&program, &args, move |event| tx.send(event).map_err(|_| ()))
+            .expect("start_pty");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut output = Vec::new();
+        let mut exit_code = None;
+        let mut answered_cursor = false;
+        let mut session = Some(session);
+        while Instant::now() < deadline && exit_code.is_none() {
+            let remain = deadline.saturating_duration_since(Instant::now());
+            if remain.is_zero() {
+                break;
+            }
+            match rx.recv_timeout(remain) {
+                Ok(SessionEvent::Data { bytes }) => output.extend(bytes),
+                Ok(SessionEvent::Exit { code }) => {
+                    exit_code = Some(code);
+                    // Do not read any further Data. Shut down before the
+                    // assertion so a late tail cannot be counted.
+                    if let Some(session) = session.take() {
+                        let _ = session.shutdown();
+                    }
+                    break;
+                }
+                Err(_) => break,
+            }
+            if let Some(session) = session.as_ref() {
+                answer_cursor_query(session, &output, &mut answered_cursor);
+            }
+        }
+        if let Some(session) = session.take() {
+            let _ = session.shutdown();
+        }
+        while rx.try_recv().is_ok() {}
+
+        let text = String::from_utf8_lossy(&output);
+        assert_eq!(
+            exit_code,
+            Some(Some(255)),
+            "expected exit 255 within 10s, output={text:?}"
+        );
+        assert!(
+            text.contains("TAIL-ERROR"),
+            "TAIL-ERROR must arrive before Exit, got {text:?}"
+        );
+    }
+
     fn bytes_contain_hi(output: &[u8]) -> bool {
         String::from_utf8_lossy(output).contains("hi")
     }
@@ -406,6 +462,30 @@ mod tests {
             (
                 PathBuf::from("/bin/sh"),
                 vec!["-c".to_string(), "printf hi; exit 3".to_string()],
+            )
+        }
+    }
+
+    fn trailing_output_program() -> (PathBuf, Vec<String>) {
+        if cfg!(windows) {
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+            let program = PathBuf::from(root).join("System32").join("cmd.exe");
+            (
+                program,
+                vec![
+                    "/c".to_string(),
+                    "(for /L %i in (1,1,4000) do @echo line%i) & echo TAIL-ERROR & exit 255"
+                        .to_string(),
+                ],
+            )
+        } else {
+            (
+                PathBuf::from("/bin/sh"),
+                vec![
+                    "-c".to_string(),
+                    "i=1; while [ $i -le 4000 ]; do echo line$i; i=$((i+1)); done; echo TAIL-ERROR; exit 255"
+                        .to_string(),
+                ],
             )
         }
     }
