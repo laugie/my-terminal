@@ -110,6 +110,15 @@ body {
   border-color: #2f7a5a;
 }
 
+.host-open-disabled {
+  cursor: default;
+}
+
+.host-open-disabled .button:not(.ghost) {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .empty {
   padding: 16px 12px;
   color: #9a9a9a;
@@ -217,23 +226,61 @@ body {
 .terminal-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
-.terminal-label {
-  font-weight: 600;
-}
-
-.terminal-target {
-  color: #bdbdbd;
+.tab-list {
+  display: flex;
   flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 200px;
+  min-width: 0;
+  border: 1px solid #3c3c3c;
+  background: #2a2a2a;
+  color: #e6e6e6;
+  border-radius: 6px;
+  padding: 4px 6px 4px 8px;
+  cursor: pointer;
+}
+
+.tab-active {
+  border-color: #2f7a5a;
+}
+
+.tab-ended {
+  color: #8a8a8a;
+}
+
+.tab-mark {
+  flex: none;
+}
+
+.tab-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.terminal-view {
+.tab-close {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0 4px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.terminal-stack {
   height: min(52vh, 480px);
   min-height: 220px;
   box-sizing: border-box;
@@ -241,7 +288,28 @@ body {
   border-radius: 8px;
   overflow: hidden;
   background: #000;
+}
+
+.terminal-stack:not(.has-tabs) {
+  height: auto;
+  min-height: 0;
+  border: none;
+  background: transparent;
+}
+
+.terminal-empty {
+  margin: 0;
+  color: #9a9a9a;
+}
+
+.terminal-view {
+  height: 100%;
+  box-sizing: border-box;
   padding: 4px;
+}
+
+.terminal-view[hidden] {
+  display: none;
 }
 
 @media (max-width: 640px) {
