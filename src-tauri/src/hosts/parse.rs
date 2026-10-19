@@ -25,6 +25,8 @@ pub struct TailnetStatus {
     pub backend_state: String,
     pub self_name: Option<String>,
     pub peers: Vec<TailscalePeer>,
+    /// Peers whose JSON could not be read. The rest of the status is still usable.
+    pub skipped_peers: usize,
 }
 
 /// One peer machine from the `Peer` map.
@@ -45,26 +47,69 @@ pub struct TailscalePeer {
 
 #[derive(Debug, Default, Deserialize)]
 struct RawStatus {
-    #[serde(rename = "BackendState", default)]
+    #[serde(rename = "BackendState", default, deserialize_with = "null_as_default")]
     backend_state: String,
     #[serde(rename = "Self", default)]
     self_node: Option<RawNode>,
-    #[serde(rename = "Peer", default)]
-    peers: Option<BTreeMap<String, RawNode>>,
+    #[serde(rename = "Peer", default, deserialize_with = "deserialize_peers")]
+    peers: ParsedPeers,
+}
+
+#[derive(Debug, Default)]
+struct ParsedPeers {
+    nodes: BTreeMap<String, RawNode>,
+    skipped: usize,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct RawNode {
-    #[serde(rename = "HostName", default)]
+    #[serde(rename = "HostName", default, deserialize_with = "null_as_default")]
     host_name: String,
-    #[serde(rename = "DNSName", default)]
+    #[serde(rename = "DNSName", default, deserialize_with = "null_as_default")]
     dns_name: String,
-    #[serde(rename = "OS", default)]
+    #[serde(rename = "OS", default, deserialize_with = "null_as_default")]
     os: String,
-    #[serde(rename = "Online", default)]
+    #[serde(rename = "Online", default, deserialize_with = "null_as_default")]
     online: bool,
-    #[serde(rename = "TailscaleIPs", default)]
+    #[serde(rename = "TailscaleIPs", default, deserialize_with = "null_as_default")]
     tailscale_ips: Vec<String>,
+}
+
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// A bad peer is skipped. Null and missing fields on a readable peer are defaults.
+fn deserialize_peers<'de, D>(deserializer: D) -> Result<ParsedPeers, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(ParsedPeers::default());
+    };
+    let serde_json::Value::Object(map) = value else {
+        return Err(serde::de::Error::custom("Peer must be an object or null"));
+    };
+    let mut nodes = BTreeMap::new();
+    let mut skipped = 0;
+    for (key, peer) in map {
+        if peer.is_null() {
+            skipped += 1;
+            continue;
+        }
+        match serde_json::from_value::<RawNode>(peer) {
+            Ok(node) => {
+                nodes.insert(key, node);
+            }
+            Err(_) => skipped += 1,
+        }
+    }
+    Ok(ParsedPeers { nodes, skipped })
 }
 
 /// Parse `tailscale status --json` text. Unknown fields are ignored.
@@ -73,12 +118,11 @@ pub fn parse_status(json: &str) -> Result<TailnetStatus, ParseError> {
         message: format!("invalid tailscale status json: {err}"),
     })?;
 
+    let skipped_peers = raw.peers.skipped;
     let mut peers = Vec::new();
-    if let Some(map) = raw.peers {
-        for (node_id, node) in map {
-            if let Some(peer) = peer_from_node(node_id, node) {
-                peers.push(peer);
-            }
+    for (node_id, node) in raw.peers.nodes {
+        if let Some(peer) = peer_from_node(node_id, node) {
+            peers.push(peer);
         }
     }
 
@@ -86,6 +130,7 @@ pub fn parse_status(json: &str) -> Result<TailnetStatus, ParseError> {
         backend_state: raw.backend_state,
         self_name: raw.self_node.as_ref().and_then(node_display_name),
         peers,
+        skipped_peers,
     })
 }
 
@@ -288,6 +333,47 @@ mod tests {
         assert!(second.is_err());
         assert!(third.is_err());
         assert!(fourth.is_err());
+    }
+
+    #[test]
+    fn null_fields_are_defaults_and_bad_peers_are_skipped() {
+        let status = parse_status(
+            r#"{
+                "BackendState": "Running",
+                "Extra": {"ignored": true},
+                "Self": {
+                    "HostName": null,
+                    "DNSName": "example-self.example.ts.net.",
+                    "OS": null,
+                    "Online": null,
+                    "TailscaleIPs": null
+                },
+                "Peer": {
+                    "good": {
+                        "HostName": "example-host-a",
+                        "DNSName": null,
+                        "OS": "linux",
+                        "Online": true,
+                        "TailscaleIPs": null
+                    },
+                    "bad": {"HostName": 1, "Online": "no"},
+                    "missing": null
+                }
+            }"#,
+        )
+        .expect("nulls and one bad peer");
+        assert_eq!(status.backend_state, "Running");
+        assert_eq!(
+            status.self_name.as_deref(),
+            Some("example-self.example.ts.net")
+        );
+        assert_eq!(status.skipped_peers, 2);
+        assert_eq!(status.peers.len(), 1);
+        assert_eq!(status.peers[0].host_name, "example-host-a");
+        assert_eq!(status.peers[0].dns_name, None);
+        assert_eq!(status.peers[0].ip, None);
+        assert_eq!(status.peers[0].connect_target, "example-host-a");
+        assert!(status.peers[0].online);
     }
 
     #[test]

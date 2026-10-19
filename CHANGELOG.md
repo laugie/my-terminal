@@ -3,6 +3,9 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
 ## [Unreleased]
+### Fixed
+- macOS 从 Finder 启动时，Tailscale 状态不再因 App 包内二进制进入 GUI 模式而解析失败。查找 CLI 时在 PATH 之后检查 `/usr/local/bin`、`/opt/homebrew/bin` 和 App 包内路径；调用时直接 spawn 并设置 `TERM=dumb`。状态 JSON 容忍 null 与单个坏节点，失败原因显示在主机列表上方。
+
 ### Added
 - 项目计划 docs/PLAN.md、README、CHANGELOG 骨架。
 - Tauri 2 项目骨架，以及 macOS（arm64 .dmg）/ Windows（NSIS .exe）构建 CI。
