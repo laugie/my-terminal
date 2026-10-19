@@ -477,3 +477,156 @@ mod tests {
         assert_eq!(json["configNotice"], "配置文件损坏，已备份并重置");
     }
 }
+
+/// Cases from issue #13. The macOS app binary prints a GUI error and exits 0
+/// when `TERM` is not exactly `dumb`; these tests pin that behavior.
+#[cfg(test)]
+mod triage_tailscale_parse {
+    use super::*;
+    use crate::hosts::exec::{locate_tailscale_cli, run_command};
+    use crate::hosts::parse::parse_status;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    const REAL: &str = include_str!("../../fixtures/tailscale/status_1_104_mac.json");
+    const NULL_IPS: &str = include_str!("../../fixtures/tailscale/status_1_104_null_ips.json");
+
+    #[test]
+    fn check_real_shape_1_104_parses() {
+        let status = parse_status(REAL).expect("1.104 shape");
+        assert_eq!(status.backend_state, "Running");
+        assert_eq!(status.peers.len(), 4);
+    }
+
+    #[test]
+    fn p1_null_tailscale_ips_is_tolerated() {
+        let status = parse_status(NULL_IPS).expect("null TailscaleIPs must be tolerated");
+        assert_eq!(status.peers.len(), 4);
+        assert_eq!(status.self_name.as_deref(), Some("example-self"));
+    }
+
+    #[test]
+    fn p2_empty_stdout_reports_specific_reason() {
+        let out = RunOutput::Finished {
+            code: Some(0),
+            stdout: String::new(),
+        };
+        let msg = compose_list(&out, &[]).message.unwrap_or_default();
+        assert_ne!(msg, MSG_PARSE, "需带具体原因，如『输出为空』");
+    }
+
+    #[test]
+    fn p3_bad_json_message_includes_position() {
+        let out = RunOutput::Finished {
+            code: Some(0),
+            stdout: "{\"BackendState\": ".into(),
+        };
+        let msg = compose_list(&out, &[]).message.unwrap_or_default();
+        assert!(msg.contains("line") || msg.contains("行"), "msg={msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn p4_nonzero_exit_carries_stderr_summary() {
+        let out = run_command(
+            Path::new("/bin/sh"),
+            &[
+                "-c",
+                "echo 'failed to connect to local tailscaled' >&2; exit 1",
+            ],
+            Duration::from_secs(2),
+        );
+        let msg = compose_list(&out, &[]).message.unwrap_or_default();
+        assert!(msg.contains("failed to connect"), "msg={msg}");
+    }
+
+    #[test]
+    fn p5_gui_path_finds_usr_local_bin_wrapper() {
+        let want = PathBuf::from("/usr/local/bin/tailscale");
+        let found = locate_tailscale_cli(None, |path| path == want.as_path(), None);
+        assert_eq!(found, Some(want));
+    }
+
+    /// Fake CLI: JSON only when `TERM` is exactly `dumb`. Any other value,
+    /// including empty, prints the GUI error and exits 0.
+    #[cfg(unix)]
+    fn fake_tailscale() -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("fake-ts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let json = dir.join("status.json");
+        std::fs::write(&json, REAL).unwrap();
+        let bin = dir.join("tailscale");
+        let script = format!(
+            "#!/bin/sh\nif [ \"$TERM\" = dumb ]; then cat '{path}'; else printf '%s\\n' 'The Tailscale GUI failed to start: placeholder reason'; exit 0; fi\n",
+            path = json.display(),
+        );
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    /// Parent `TERM` is often already `dumb` in CI, which a child would inherit.
+    /// Force a different value around the spawn so only `Command`'s own
+    /// `TERM=dumb` can make the fake CLI emit JSON.
+    #[cfg(unix)]
+    struct ParentTermGuard(Option<std::ffi::OsString>);
+
+    #[cfg(unix)]
+    impl ParentTermGuard {
+        fn force_not_dumb() -> Self {
+            let previous = std::env::var_os("TERM");
+            // `set_var` is safe before Rust 1.87 and unsafe afterwards.
+            // The block compiles on both.
+            #[allow(unused_unsafe)]
+            unsafe {
+                std::env::set_var("TERM", "not-dumb");
+            }
+            Self(previous)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ParentTermGuard {
+        fn drop(&mut self) {
+            #[allow(unused_unsafe)]
+            unsafe {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("TERM", value),
+                    None => std::env::remove_var("TERM"),
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn p6_child_env_sets_term_so_app_binary_runs_cli_mode() {
+        let _guard = ParentTermGuard::force_not_dumb();
+        let out = run_command(
+            &fake_tailscale(),
+            crate::hosts::exec::TAILSCALE_STATUS_ARGS,
+            Duration::from_secs(3),
+        );
+        let listed = compose_list(&out, &[]);
+        assert_eq!(
+            listed.status, "ok",
+            "子进程未带 TERM=dumb，拿到 GUI 报错：{:?}",
+            listed.message
+        );
+        assert_eq!(listed.hosts.len(), 4);
+    }
+
+    #[test]
+    fn p6b_gui_error_text_is_reported_specifically() {
+        let out = RunOutput::Finished {
+            code: Some(0),
+            stdout: "The Tailscale GUI failed to start: placeholder reason\n".into(),
+        };
+        let msg = compose_list(&out, &[]).message.unwrap_or_default();
+        assert!(
+            msg.contains("GUI") || msg.contains("不是 JSON"),
+            "msg={msg}"
+        );
+    }
+}
