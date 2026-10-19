@@ -1,5 +1,6 @@
 pub mod config;
 pub mod hosts;
+pub mod session;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -9,13 +10,28 @@ pub fn run() {
         .setup(|app| {
             let dir = config::resolve_app_config_dir(app.handle())?;
             app.manage(hosts::HostState::open(&dir));
+            app.manage(session::SessionState::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             hosts::list_hosts,
             hosts::add_manual_host,
             hosts::remove_manual_host,
+            session::open_session,
+            session::write_session,
+            session::resize_session,
+            session::close_session,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                if let Some(state) = app.try_state::<session::SessionState>() {
+                    state.shutdown_blocking();
+                }
+            }
+        });
 }

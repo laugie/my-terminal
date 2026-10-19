@@ -7,6 +7,10 @@
     "core:default",
     "allow-list-hosts",
     "allow-add-manual-host",
-    "allow-remove-manual-host"
+    "allow-remove-manual-host",
+    "allow-open-session",
+    "allow-write-session",
+    "allow-resize-session",
+    "allow-close-session"
   ]
 }
