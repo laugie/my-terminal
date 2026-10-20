@@ -4,6 +4,8 @@ mod validate;
 
 use std::path::Path;
 
+use tauri::Manager;
+
 pub use args::{plan_device_session, ssh_args_for, SessionPlan, TempSshConfig};
 pub use parse::{parse_topology, Device, Region, Topology};
 
@@ -47,6 +49,8 @@ pub struct DeviceView {
 /// The command does not hold a lock across `.await`.
 #[tauri::command]
 pub async fn load_topology(app: tauri::AppHandle) -> Result<TopologyView, String> {
+    crate::auth::require_unlocked(&app.state::<crate::auth::AuthState>())
+        .map_err(|err| err.to_string())?;
     let dir =
         crate::config::resolve_app_config_dir(&app).map_err(|_| "无法定位配置目录".to_string())?;
     let view = tauri::async_runtime::spawn_blocking(move || load_topology_from_dir(&dir))

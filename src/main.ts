@@ -9,6 +9,7 @@ import {
 import { loadTopology, type TopologyView } from "./topology.ts";
 import { renderTopology } from "./topology-view.ts";
 import { TAB_LIMIT_MESSAGE, mountTerminal } from "./terminal.ts";
+import { mountLogin } from "./login.ts";
 
 const app = document.querySelector("#app");
 if (!(app instanceof HTMLElement)) {
@@ -65,7 +66,10 @@ formSection.append(formTitle, form, formError);
 manualRoot.append(list, formSection);
 
 const terminalPanel = el("section", "terminal-panel");
-app.append(header, statusBar, topologyRoot, manualRoot, terminalPanel);
+const shell = el("div", "shell");
+shell.hidden = true;
+shell.append(header, statusBar, topologyRoot, manualRoot, terminalPanel);
+app.append(shell);
 
 const terminal = mountTerminal(
   terminalPanel,
@@ -80,6 +84,7 @@ const terminal = mountTerminal(
 );
 
 let page: Page = "topology";
+let signedIn = false;
 let refreshGeneration = 0;
 let topologyGeneration = 0;
 let topologyBusy = false;
@@ -108,8 +113,12 @@ form.addEventListener("submit", (event) => {
   void onAdd();
 });
 
-showPage("topology");
-void refreshTopology();
+mountLogin(app, () => {
+  signedIn = true;
+  shell.hidden = false;
+  showPage("topology");
+  void refreshTopology();
+});
 
 function showPage(next: Page): void {
   page = next;
@@ -128,6 +137,9 @@ function syncRefreshButton(): void {
 }
 
 async function refreshTopology(): Promise<void> {
+  if (!signedIn) {
+    return;
+  }
   const generation = ++topologyGeneration;
   topologyBusy = true;
   syncRefreshButton();
@@ -171,6 +183,9 @@ function paintTopology(): void {
 }
 
 async function refreshHosts(): Promise<void> {
+  if (!signedIn) {
+    return;
+  }
   const generation = ++refreshGeneration;
   hostsBusy = true;
   syncRefreshButton();

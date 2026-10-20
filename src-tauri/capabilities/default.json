@@ -5,6 +5,9 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "allow-auth-status",
+    "allow-auth-setup",
+    "allow-auth-login",
     "allow-list-hosts",
     "allow-add-manual-host",
     "allow-remove-manual-host",

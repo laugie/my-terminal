@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod config;
 pub mod hosts;
 pub mod session;
@@ -12,9 +13,13 @@ pub fn run() {
             let dir = config::resolve_app_config_dir(app.handle())?;
             app.manage(hosts::HostState::open(&dir));
             app.manage(session::SessionState::new());
+            app.manage(auth::open_state());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            auth::auth_status,
+            auth::auth_setup,
+            auth::auth_login,
             hosts::list_hosts,
             hosts::add_manual_host,
             hosts::remove_manual_host,
