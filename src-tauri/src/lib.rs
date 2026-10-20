@@ -1,6 +1,7 @@
 pub mod config;
 pub mod hosts;
 pub mod session;
+pub mod topology;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,6 +18,7 @@ pub fn run() {
             hosts::list_hosts,
             hosts::add_manual_host,
             hosts::remove_manual_host,
+            topology::load_topology,
             session::open_session,
             session::write_session,
             session::resize_session,

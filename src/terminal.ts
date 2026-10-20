@@ -10,6 +10,7 @@ import {
   writeSession,
   type SessionEvent,
 } from "./session.ts";
+import { openTopologyDevice } from "./topology.ts";
 import { splitWriteChunks } from "./write-chunks.ts";
 import { WriteQueue } from "./write-queue.ts";
 
@@ -23,8 +24,12 @@ const EXIT_REAP_DELAY_MS = 300;
 
 type Phase = "connecting" | "live" | "ended";
 
+type TabOrigin =
+  | { kind: "host"; host: HostEntry }
+  | { kind: "device"; name: string };
+
 interface Tab {
-  host: HostEntry;
+  origin: TabOrigin;
   phase: Phase;
   sessionId: string;
   generation: number;
@@ -43,7 +48,9 @@ interface Tab {
 
 export interface TerminalPanel {
   connect(host: HostEntry): Promise<void>;
+  connectDevice(name: string): Promise<void>;
   activeHostId(): string | null;
+  activeDeviceName(): string | null;
   canOpenTab(): boolean;
 }
 
@@ -99,17 +106,25 @@ export function mountTerminal(
   refreshChrome();
 
   async function connect(host: HostEntry): Promise<void> {
+    await connectOrigin({ kind: "host", host });
+  }
+
+  async function connectDevice(name: string): Promise<void> {
+    await connectOrigin({ kind: "device", name });
+  }
+
+  async function connectOrigin(origin: TabOrigin): Promise<void> {
     if (tabs.length >= MAX_TABS) {
       sessionError.textContent = TAB_LIMIT_MESSAGE;
       return;
     }
     sessionError.textContent = "";
-    const tab = createTab(host);
+    const tab = createTab(origin);
     activate(tab);
     await openOnTab(tab, false);
   }
 
-  function createTab(host: HostEntry): Tab {
+  function createTab(origin: TabOrigin): Tab {
     const view = el("div", "terminal-view");
     view.hidden = true;
     stack.append(view);
@@ -137,7 +152,7 @@ export function mountTerminal(
     term.loadAddon(fit);
 
     const tab: Tab = {
-      host,
+      origin,
       phase: "connecting",
       sessionId: "",
       generation: 0,
@@ -200,7 +215,7 @@ export function mountTerminal(
     refreshChrome();
     onChange();
     try {
-      const opened = await openSession(sshTargetOf(tab.host), (event) => {
+      const opened = await openOrigin(tab.origin, (event) => {
         if (tab.generation !== myGeneration) {
           return;
         }
@@ -374,9 +389,10 @@ export function mountTerminal(
   function refreshTitles(): void {
     const groups = new Map<string, Tab[]>();
     for (const tab of tabs) {
-      const group = groups.get(tab.host.name) ?? [];
+      const name = originName(tab.origin);
+      const group = groups.get(name) ?? [];
       group.push(tab);
-      groups.set(tab.host.name, group);
+      groups.set(name, group);
     }
     for (const [name, group] of groups) {
       group.forEach((tab, index) => {
@@ -613,9 +629,25 @@ export function mountTerminal(
 
   return {
     connect,
-    activeHostId: () => active?.host.id ?? null,
+    connectDevice,
+    activeHostId: () => (active?.origin.kind === "host" ? active.origin.host.id : null),
+    activeDeviceName: () => (active?.origin.kind === "device" ? active.origin.name : null),
     canOpenTab: () => tabs.length < MAX_TABS,
   };
+}
+
+function originName(origin: TabOrigin): string {
+  return origin.kind === "host" ? origin.host.name : origin.name;
+}
+
+function openOrigin(
+  origin: TabOrigin,
+  onEvent: (event: SessionEvent) => void,
+): Promise<{ id: string }> {
+  if (origin.kind === "host") {
+    return openSession(sshTargetOf(origin.host), onEvent);
+  }
+  return openTopologyDevice(origin.name, onEvent);
 }
 
 function phaseOf(tab: Tab): Phase {

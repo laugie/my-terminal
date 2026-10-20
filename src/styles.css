@@ -21,6 +21,15 @@ body {
   gap: 12px;
 }
 
+.nav {
+  display: flex;
+  gap: 8px;
+}
+
+.nav-button.active {
+  border-color: #2f7a5a;
+}
+
 .title,
 .section-title {
   margin: 0;
@@ -57,6 +66,10 @@ body {
 
 .button.ghost {
   padding: 2px 8px;
+}
+
+.status[hidden] {
+  display: none;
 }
 
 .status {
@@ -176,6 +189,80 @@ body {
 
 .dot.offline {
   background: #8a8a8a;
+}
+
+.dot.unknown {
+  background: transparent;
+  box-sizing: border-box;
+  border: 1px solid #e6c98a;
+}
+
+.tag.mobile {
+  border-color: #2f7a5a;
+  color: #b7e4cf;
+}
+
+.topology,
+.manual-page {
+  margin: 0 0 24px;
+}
+
+.topology[hidden],
+.manual-page[hidden] {
+  display: none;
+}
+
+.region {
+  margin: 0 0 16px;
+}
+
+.region-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.devices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.device {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  cursor: pointer;
+  background: #252526;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+.device-active {
+  border-color: #2f7a5a;
+}
+
+.device-open-disabled {
+  cursor: default;
+}
+
+.device-open-disabled .button {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.topology-hint {
+  margin: 0;
+  padding: 16px 12px;
+  color: #e6c98a;
+  background: #252526;
+  border: 1px solid #8a6a2f;
+  border-radius: 8px;
+  white-space: pre-wrap;
 }
 
 .tag {
@@ -326,7 +413,12 @@ body {
 }
 
 @media (max-width: 640px) {
+  .top {
+    flex-wrap: wrap;
+  }
+
   .host,
+  .device,
   .form {
     display: flex;
     flex-direction: column;
