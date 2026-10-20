@@ -183,9 +183,7 @@ function labeledInput(
   caption.textContent = labelText;
   const input = document.createElement("input");
   input.name = name;
-  // The masked value is the HTML secret-input type. Built here so this file
-  // does not contain the substring the ssh argument scan rejects.
-  input.type = masked ? ["pass", "word"].join("") : "text";
+  input.type = masked ? "password" : "text";
   input.autocomplete = "off";
   input.spellcheck = false;
   label.append(caption, input);

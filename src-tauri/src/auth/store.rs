@@ -97,7 +97,7 @@ impl SecretStore for KeyringStore {
         let Some(entry) = &self.entry else {
             return Err(StoreError);
         };
-        match read_blob(entry) {
+        match entry.get_password() {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err(StoreError),
@@ -108,8 +108,6 @@ impl SecretStore for KeyringStore {
         let Some(entry) = &self.entry else {
             return Err(StoreError);
         };
-        write_blob(entry, value).map_err(|_| StoreError)
+        entry.set_password(value).map_err(|_| StoreError)
     }
 }
-
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/keyring_impl.rs"));

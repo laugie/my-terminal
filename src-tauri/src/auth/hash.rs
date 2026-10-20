@@ -4,7 +4,9 @@
 //! and a random 16-byte salt stored inside the PHC string. Contract tests go
 //! through [`HashParams::fast`] so debug builds stay quick.
 
-use argon2::Params;
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::{Algorithm, Argon2, Params, Version};
+use rand_core::{OsRng, RngCore};
 
 /// Random salt length, in bytes. This is also Argon2's recommended salt length.
 pub const SALT_LEN: usize = 16;
@@ -41,7 +43,30 @@ impl HashParams {
     }
 }
 
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/phc_impl.rs"));
+pub(crate) fn hash_secret(params: HashParams, secret: &str) -> Result<String, ()> {
+    let hasher = Argon2::new(
+        Algorithm::Argon2id,
+        Version::V0x13,
+        params.to_argon().map_err(|_| ())?,
+    );
+    let mut salt_bytes = [0u8; SALT_LEN];
+    let mut rng = OsRng;
+    rng.fill_bytes(&mut salt_bytes);
+    let salt = SaltString::encode_b64(&salt_bytes).map_err(|_| ())?;
+    let hashed = hasher
+        .hash_password(secret.as_bytes(), &salt)
+        .map_err(|_| ())?;
+    Ok(hashed.to_string())
+}
+
+pub(crate) fn verify_secret(phc: &str, secret: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(phc) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(secret.as_bytes(), &parsed)
+        .is_ok()
+}
 
 #[cfg(test)]
 mod tests {
