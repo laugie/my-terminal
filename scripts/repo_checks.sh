@@ -20,4 +20,23 @@ for r in d["regions"]:
 print("FAIL: 非保留地址", bad) if bad else None; sys.exit(1 if bad else 0)
 PY
 done
+# password 子串。斜杠规范化后，仓库相对路径必须和下面某一项完全相等，不是目录前缀。
+# 其他禁用词没有白名单。
+# src-tauri/src/auth/hash.rs: argon2 的 password_hash API（PasswordHash、hash_password、verify_password）就叫这个词。
+# src-tauri/src/auth/store.rs: keyring 的 get_password / set_password 就叫这个词。
+# src/login.ts: HTML 口令框的 type 必须是 password。
+password_allowed() {
+  case "$1" in
+    src-tauri/src/auth/hash.rs|src-tauri/src/auth/store.rs|src/login.ts) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+while IFS= read -r -d '' file; do
+  rel="${file#./}"
+  rel="${rel//\\//}"
+  if grep -q -i 'password' "$file" && ! password_allowed "$rel"; then
+    echo "FAIL: password appeared in $rel"
+    fail=1
+  fi
+done < <(find src-tauri/src src -type f -print0)
 [ $fail = 0 ] && echo "PASS: repo checks"; exit $fail

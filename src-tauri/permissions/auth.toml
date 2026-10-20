@@ -1,0 +1,14 @@
+[[permission]]
+identifier = "allow-auth-status"
+description = "Enables the auth_status command without any pre-configured scope."
+commands.allow = ["auth_status"]
+
+[[permission]]
+identifier = "allow-auth-setup"
+description = "Enables the auth_setup command without any pre-configured scope."
+commands.allow = ["auth_setup"]
+
+[[permission]]
+identifier = "allow-auth-login"
+description = "Enables the auth_login command without any pre-configured scope."
+commands.allow = ["auth_login"]

@@ -292,6 +292,10 @@ body {
   color: #bdbdbd;
 }
 
+.field[hidden] {
+  display: none;
+}
+
 .field input {
   box-sizing: border-box;
   width: 100%;
@@ -310,6 +314,31 @@ body {
   min-height: 1.2em;
   margin: 8px 0 0;
   color: #f0a0a0;
+}
+
+.shell[hidden],
+.login-panel[hidden],
+.login-form[hidden] {
+  display: none;
+}
+
+.login-panel {
+  max-width: 420px;
+  margin: 40px auto 0;
+  padding: 20px;
+  background: #252526;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+.login-form {
+  grid-template-columns: 1fr;
+}
+
+.login-hint {
+  min-height: 1.2em;
+  margin: 8px 0 0;
+  color: #e6c98a;
 }
 
 .terminal-panel {

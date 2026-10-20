@@ -300,6 +300,8 @@ pub async fn open_session(
     device_name: Option<String>,
     on_event: tauri::ipc::Channel<SessionEvent>,
 ) -> Result<OpenSessionResponse, String> {
+    crate::auth::require_unlocked(&app.state::<crate::auth::AuthState>())
+        .map_err(|err| err.to_string())?;
     let mut planned = if let Some(device_name) = device_name.filter(|name| !name.is_empty()) {
         let app_for_load = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -374,6 +376,8 @@ pub async fn open_session(
 /// 写入可能阻塞，因此放在 `spawn_blocking` 中；写锁只在该闭包内持有。
 #[tauri::command]
 pub async fn write_session(app: tauri::AppHandle, id: String, data: String) -> Result<(), String> {
+    crate::auth::require_unlocked(&app.state::<crate::auth::AuthState>())
+        .map_err(|err| err.to_string())?;
     let bytes = data.into_bytes();
     tauri::async_runtime::spawn_blocking(move || app.state::<SessionState>().write(&id, &bytes))
         .await
@@ -390,6 +394,8 @@ pub async fn resize_session(
     cols: u32,
     rows: u32,
 ) -> Result<(), String> {
+    crate::auth::require_unlocked(&app.state::<crate::auth::AuthState>())
+        .map_err(|err| err.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<SessionState>().resize(&id, cols, rows)
     })
