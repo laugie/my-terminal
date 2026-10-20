@@ -1,4 +1,4 @@
-mod args;
+pub(crate) mod args;
 mod binary;
 mod io;
 mod pty;
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use pty::LiveSession;
 use tauri::Manager;
 
-pub use args::{build_ssh_args, SshTarget};
+pub use args::{build_ssh_args, SshOptions, SshTarget};
 pub use binary::{resolve_ssh_binary, resolve_ssh_binary_with, OsKind, SSH_NOT_FOUND};
 pub use size::{normalize_pty_size, MAX_PTY_COLS, MAX_PTY_ROWS};
 
@@ -51,6 +51,8 @@ struct Inner {
     epoch: u64,
     pending: Vec<Pending>,
     sessions: HashMap<String, LiveSession>,
+    /// ssh `-F` files owned by a live session. Removed when that session ends.
+    temp_configs: HashMap<String, std::path::PathBuf>,
 }
 
 /// Process-wide session table. At most [`MAX_TABS`] sessions may be in flight.
@@ -65,6 +67,7 @@ impl SessionState {
                 epoch: 0,
                 pending: Vec::new(),
                 sessions: HashMap::new(),
+                temp_configs: HashMap::new(),
             }),
         }
     }
@@ -93,22 +96,39 @@ impl SessionState {
         guard.pending.retain(|pending| pending.id != id);
     }
 
-    fn install(
+    fn install(&self, id: &str, session: LiveSession) -> Result<OpenSessionResponse, LiveSession> {
+        self.install_prepared(id, session, None)
+            .map_err(|(session, _)| session)
+    }
+
+    /// Install `session` and, in the same lock, remember a temp ssh config.
+    ///
+    /// On failure the path is returned so the caller can delete it. The file
+    /// is not deleted here: the caller still owns the armed guard.
+    fn install_prepared(
         &self,
         id: &str,
         mut session: LiveSession,
-    ) -> Result<OpenSessionResponse, LiveSession> {
+        temp_config: Option<std::path::PathBuf>,
+    ) -> Result<OpenSessionResponse, (LiveSession, Option<std::path::PathBuf>)> {
         let mut guard = self.lock();
         let Some(index) = guard.pending.iter().position(|pending| pending.id == id) else {
-            return Err(session);
+            return Err((session, temp_config));
         };
         let pending = guard.pending.remove(index);
         if pending.epoch != guard.epoch {
-            return Err(session);
+            return Err((session, temp_config));
         }
         session.id = id.to_string();
         guard.sessions.insert(id.to_string(), session);
+        if let Some(path) = temp_config {
+            guard.temp_configs.insert(id.to_string(), path);
+        }
         Ok(OpenSessionResponse { id: id.to_string() })
+    }
+
+    fn take_temp(&self, id: &str) -> Option<std::path::PathBuf> {
+        self.lock().temp_configs.remove(id)
     }
 
     fn take(&self, id: &str) -> Result<Option<LiveSession>, String> {
@@ -165,13 +185,19 @@ impl SessionState {
     /// install a process after the window has closed. Children are signalled
     /// together; one deadline covers the whole set.
     pub fn shutdown_blocking(&self) {
-        let sessions = {
+        let (sessions, temps) = {
             let mut guard = self.lock();
             guard.epoch = guard.epoch.wrapping_add(1);
             guard.pending.clear();
-            std::mem::take(&mut guard.sessions)
+            (
+                std::mem::take(&mut guard.sessions),
+                std::mem::take(&mut guard.temp_configs),
+            )
         };
         shutdown_all(sessions.into_values().collect());
+        for path in temps.into_values() {
+            remove_temp_config(&path);
+        }
     }
 
     #[cfg(test)]
@@ -261,15 +287,37 @@ impl Drop for Reservation {
 ///
 /// 最多 8 个标签。碰外部进程的命令一律 async。创建 PTY 与等待子进程都在
 /// 阻塞线程里完成，状态锁不跨 `.await` 持有。`JoinError` 转成错误，不 panic。
+///
+/// `device_name` selects a row from the local topology file. Host, user, port,
+/// key path, and jump are taken from that file and checked again here. A
+/// request that sets `device_name` ignores `host` / `user` / `port`.
 #[tauri::command]
 pub async fn open_session(
     app: tauri::AppHandle,
-    host: String,
+    host: Option<String>,
     user: Option<String>,
     port: Option<u16>,
+    device_name: Option<String>,
     on_event: tauri::ipc::Channel<SessionEvent>,
 ) -> Result<OpenSessionResponse, String> {
-    let args = build_ssh_args(&SshTarget { host, user, port })?;
+    let mut planned = if let Some(device_name) = device_name.filter(|name| !name.is_empty()) {
+        let app_for_load = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let dir = crate::config::resolve_app_config_dir(&app_for_load)
+                .map_err(|_| "无法定位配置目录".to_string())?;
+            crate::topology::plan_device_session(&dir, &device_name)
+        })
+        .await
+        .map_err(|_| "读取拓扑配置失败".to_string())??
+    } else {
+        let host = host.ok_or_else(|| "主机不能为空".to_string())?;
+        crate::topology::SessionPlan {
+            args: build_ssh_args(&SshTarget { host, user, port })?,
+            temp_file: None,
+        }
+    };
+    let args = std::mem::take(&mut planned.args);
+    let mut temp_file = planned.temp_file.take();
     let id = app.state::<SessionState>().begin()?;
     let mut reservation = Reservation {
         app: app.clone(),
@@ -285,13 +333,24 @@ pub async fn open_session(
             })
         })();
         match started {
-            Ok(session) => match app_for_task.state::<SessionState>().install(&id, session) {
-                Ok(response) => Ok(response),
-                Err(session) => {
-                    let _ = session.shutdown();
-                    Err("会话已取消".to_string())
+            Ok(session) => {
+                let stored = temp_file.as_ref().map(|file| file.path().to_path_buf());
+                match app_for_task
+                    .state::<SessionState>()
+                    .install_prepared(&id, session, stored)
+                {
+                    Ok(response) => {
+                        if let Some(file) = temp_file.as_mut() {
+                            file.disarm();
+                        }
+                        Ok(response)
+                    }
+                    Err((session, _)) => {
+                        let _ = session.shutdown();
+                        Err("会话已取消".to_string())
+                    }
                 }
-            },
+            }
             Err(err) => {
                 app_for_task.state::<SessionState>().abort(&id);
                 Err(err)
@@ -344,12 +403,28 @@ pub async fn resize_session(
 #[tauri::command]
 pub async fn close_session(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let session = app.state::<SessionState>().take(&id)?;
-    if let Some(session) = session {
-        tauri::async_runtime::spawn_blocking(move || session.shutdown())
-            .await
-            .map_err(|_| "结束会话失败".to_string())??;
+    let temp = app.state::<SessionState>().take_temp(&id);
+    if session.is_none() && temp.is_none() {
+        return Ok(());
     }
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = if let Some(session) = session {
+            session.shutdown()
+        } else {
+            Ok(())
+        };
+        if let Some(path) = temp {
+            remove_temp_config(&path);
+        }
+        result
+    })
+    .await
+    .map_err(|_| "结束会话失败".to_string())??;
     Ok(())
+}
+
+fn remove_temp_config(path: &std::path::Path) {
+    let _ = std::fs::remove_file(path);
 }
 
 #[cfg(test)]
@@ -601,5 +676,21 @@ mod tests {
         let unknown = SessionEvent::Exit { code: None };
         let json = serde_json::to_value(&unknown).unwrap();
         assert!(json["code"].is_null());
+    }
+
+    #[test]
+    fn shutdown_removes_a_temp_ssh_config() {
+        let state = SessionState::new();
+        let path = std::env::temp_dir().join(format!(
+            "my-terminal-ssh-test-{}-shutdown.conf",
+            std::process::id()
+        ));
+        std::fs::write(&path, "Match all\n").unwrap();
+        state
+            .lock()
+            .temp_configs
+            .insert("session-x".to_string(), path.clone());
+        state.shutdown_blocking();
+        assert!(!path.exists());
     }
 }

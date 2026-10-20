@@ -8,6 +8,7 @@
     "allow-list-hosts",
     "allow-add-manual-host",
     "allow-remove-manual-host",
+    "allow-load-topology",
     "allow-open-session",
     "allow-write-session",
     "allow-resize-session",

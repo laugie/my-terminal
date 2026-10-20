@@ -4,3 +4,4 @@ dist
 dist-test
 .DS_Store
 src-tauri/gen/schemas
+topology.json

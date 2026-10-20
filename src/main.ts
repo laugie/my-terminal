@@ -6,6 +6,8 @@ import {
   type HostEntry,
   type ListHostsResponse,
 } from "./hosts.ts";
+import { loadTopology, type TopologyView } from "./topology.ts";
+import { renderTopology } from "./topology-view.ts";
 import { TAB_LIMIT_MESSAGE, mountTerminal } from "./terminal.ts";
 
 const app = document.querySelector("#app");
@@ -13,18 +15,30 @@ if (!(app instanceof HTMLElement)) {
   throw new Error("missing #app");
 }
 
+type Page = "topology" | "manual";
+
 const header = el("header", "top");
 const title = el("h1", "title");
 title.textContent = "my-terminal";
+const nav = el("nav", "nav");
+nav.setAttribute("aria-label", "页面");
+const topologyButton = navButton("拓扑");
+const manualButton = navButton("手动服务器");
+nav.append(topologyButton, manualButton);
 const refreshButton = document.createElement("button");
 refreshButton.type = "button";
 refreshButton.className = "button";
-refreshButton.textContent = "刷新";
-header.append(title, refreshButton);
+refreshButton.textContent = "重新加载";
+header.append(title, nav, refreshButton);
 
 const statusBar = el("div", "status");
 statusBar.setAttribute("role", "status");
 
+const topologyRoot = el("div", "topology");
+topologyRoot.tabIndex = -1;
+
+const manualRoot = el("div", "manual-page");
+manualRoot.hidden = true;
 const list = document.createElement("ul");
 list.className = "hosts";
 
@@ -48,42 +62,124 @@ form.append(submit);
 const formError = el("p", "form-error");
 formError.setAttribute("role", "alert");
 formSection.append(formTitle, form, formError);
+manualRoot.append(list, formSection);
 
 const terminalPanel = el("section", "terminal-panel");
-app.append(header, statusBar, list, terminalPanel, formSection);
+app.append(header, statusBar, topologyRoot, manualRoot, terminalPanel);
 
 const terminal = mountTerminal(
   terminalPanel,
   () => {
-    refreshActiveHost();
+    markActive();
   },
   () => {
-    list.tabIndex = -1;
-    list.focus();
+    const target = page === "topology" ? topologyRoot : list;
+    target.tabIndex = -1;
+    target.focus();
   },
 );
 
+let page: Page = "topology";
 let refreshGeneration = 0;
+let topologyGeneration = 0;
+let topologyBusy = false;
+let hostsBusy = false;
+let manualLoaded = false;
+let topologyView: TopologyView | null = null;
 
-refreshButton.addEventListener("click", () => {
-  void refresh();
+topologyButton.addEventListener("click", () => {
+  showPage("topology");
 });
-
+manualButton.addEventListener("click", () => {
+  showPage("manual");
+  if (!manualLoaded) {
+    void refreshHosts();
+  }
+});
+refreshButton.addEventListener("click", () => {
+  if (page === "topology") {
+    void refreshTopology();
+  } else {
+    void refreshHosts();
+  }
+});
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   void onAdd();
 });
 
-void refresh();
+showPage("topology");
+void refreshTopology();
 
-async function refresh(): Promise<void> {
+function showPage(next: Page): void {
+  page = next;
+  topologyRoot.hidden = next !== "topology";
+  manualRoot.hidden = next !== "manual";
+  statusBar.hidden = next !== "manual";
+  topologyButton.classList.toggle("active", next === "topology");
+  manualButton.classList.toggle("active", next === "manual");
+  topologyButton.setAttribute("aria-current", next === "topology" ? "page" : "false");
+  manualButton.setAttribute("aria-current", next === "manual" ? "page" : "false");
+  syncRefreshButton();
+}
+
+function syncRefreshButton(): void {
+  refreshButton.disabled = page === "topology" ? topologyBusy : hostsBusy;
+}
+
+async function refreshTopology(): Promise<void> {
+  const generation = ++topologyGeneration;
+  topologyBusy = true;
+  syncRefreshButton();
+  try {
+    const view = await loadTopology();
+    if (generation !== topologyGeneration) {
+      return;
+    }
+    topologyView = view;
+    paintTopology();
+  } catch (err) {
+    if (generation !== topologyGeneration) {
+      return;
+    }
+    topologyView = {
+      configPath: "",
+      state: "error",
+      message: errorText(err),
+      regions: [],
+    };
+    paintTopology();
+  } finally {
+    if (generation === topologyGeneration) {
+      topologyBusy = false;
+      syncRefreshButton();
+    }
+  }
+}
+
+function paintTopology(): void {
+  if (!topologyView) {
+    return;
+  }
+  renderTopology(topologyRoot, topologyView, {
+    onConnect: (name) => {
+      void terminal.connectDevice(name);
+    },
+    activeName: terminal.activeDeviceName(),
+    canOpen: terminal.canOpenTab(),
+  });
+}
+
+async function refreshHosts(): Promise<void> {
   const generation = ++refreshGeneration;
-  refreshButton.disabled = true;
+  hostsBusy = true;
+  syncRefreshButton();
   try {
     const result = await listHosts();
     if (generation !== refreshGeneration) {
       return;
     }
+    manualLoaded = true;
     render(result);
     formError.textContent = "";
   } catch (err) {
@@ -96,7 +192,8 @@ async function refresh(): Promise<void> {
     formError.textContent = errorText(err);
   } finally {
     if (generation === refreshGeneration) {
-      refreshButton.disabled = false;
+      hostsBusy = false;
+      syncRefreshButton();
     }
   }
 }
@@ -124,7 +221,7 @@ async function onAdd(): Promise<void> {
       port,
     });
     form.reset();
-    await refresh();
+    await refreshHosts();
   } catch (err) {
     formError.textContent = errorText(err);
   } finally {
@@ -171,12 +268,18 @@ function render(result: ListHostsResponse): void {
   }
 }
 
-function refreshActiveHost(): void {
+function markActive(): void {
   const activeId = terminal.activeHostId();
   const canOpen = terminal.canOpenTab();
   for (const item of list.querySelectorAll<HTMLLIElement>(".host")) {
     item.classList.toggle("host-active", item.dataset.hostId === activeId);
     item.classList.toggle("host-open-disabled", !canOpen);
+    item.title = canOpen ? "" : TAB_LIMIT_MESSAGE;
+  }
+  const activeName = terminal.activeDeviceName();
+  for (const item of topologyRoot.querySelectorAll<HTMLLIElement>(".device")) {
+    item.classList.toggle("device-active", item.dataset.deviceName === activeName);
+    item.classList.toggle("device-open-disabled", !canOpen);
     item.title = canOpen ? "" : TAB_LIMIT_MESSAGE;
   }
 }
@@ -239,7 +342,7 @@ async function onRemove(id: string): Promise<void> {
   formError.textContent = "";
   try {
     await removeManualHost(id);
-    await refresh();
+    await refreshHosts();
   } catch (err) {
     formError.textContent = errorText(err);
   }
@@ -260,6 +363,14 @@ function sourceLabel(source: HostEntry["source"]): string {
     case "tailscale+manual":
       return "Tailscale+手动";
   }
+}
+
+function navButton(label: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "button nav-button";
+  button.textContent = label;
+  return button;
 }
 
 function field(

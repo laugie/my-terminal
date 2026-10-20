@@ -7,6 +7,7 @@
 - macOS 从 Finder 启动时，Tailscale 状态不再因 App 包内二进制进入 GUI 模式而解析失败。查找 CLI 时在 PATH 之后检查 `/usr/local/bin`、`/opt/homebrew/bin` 和 App 包内路径；调用时直接 spawn 并设置 `TERM=dumb`。状态 JSON 容忍 null 与单个坏节点，失败原因显示在主机列表上方。
 
 ### Added
+- 拓扑首页：按区域显示本机 `topology.json`，移动设备带标签；文件缺失、格式错误、重名或 jump 成环时给出具体提示，并提供「重新加载」。点击只提交设备名。跳板机写了密钥路径时生成临时 ssh 配置（Unix `0600`；Windows 用 `icacls` 去掉继承并尽量只留给当前用户），以 `-F` 调用且 `Include ~/.ssh/config`，会话结束或退出时删除。`tailscaleAddress` 对照现有 Tailscale 状态显示在线、离线或未知。原来的服务器列表保留在「手动服务器」。
 - 项目计划 docs/PLAN.md、README、CHANGELOG 骨架。
 - Tauri 2 项目骨架，以及 macOS（arm64 .dmg）/ Windows（NSIS .exe）构建 CI。
 - 服务器列表：解析 `tailscale status --json`（机器名、IP、在线状态），并支持在内存中手动添加服务器。

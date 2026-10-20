@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-load-topology"
+description = "Enables the load_topology command without any pre-configured scope."
+commands.allow = ["load_topology"]

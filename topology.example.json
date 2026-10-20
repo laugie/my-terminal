@@ -1,0 +1,43 @@
+{
+  "regions": [
+    {
+      "name": "示例办公室",
+      "devices": [
+        {"name": "示例路由器", "host": "192.0.2.1", "user": "admin"},
+        {
+          "name": "示例笔记本",
+          "host": "192.0.2.20",
+          "user": "me",
+          "mobile": true,
+          "tailscaleAddress": "192.0.2.20"
+        }
+      ]
+    },
+    {
+      "name": "示例云",
+      "devices": [
+        {
+          "name": "跳板机",
+          "host": "jump.example.com",
+          "port": 2222,
+          "user": "me",
+          "identityFile": "~/.ssh/id_example"
+        },
+        {
+          "name": "内网服务器",
+          "host": "app.example.com",
+          "user": "me",
+          "identityFile": "~/.ssh/id_app",
+          "jump": "跳板机"
+        },
+        {
+          "name": "二级内网",
+          "host": "192.0.2.30",
+          "port": 2200,
+          "user": "ops",
+          "jump": "内网服务器"
+        }
+      ]
+    }
+  ]
+}
