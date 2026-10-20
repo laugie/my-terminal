@@ -337,6 +337,9 @@ pub async fn auth_login(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Barrier;
+    use std::thread;
+
     use super::*;
 
     fn token(tag: &str) -> String {
@@ -405,5 +408,77 @@ mod tests {
         };
         assert_eq!(before, after);
         assert!(after > Duration::from_secs(29));
+    }
+
+    /// Wrong attempts that overlap must not each get a free verification.
+    /// At most five return [`LoginError::BadCredentials`]; the rest are throttled.
+    /// The stored counter matches the number of attempts that were actually checked.
+    #[test]
+    fn concurrent_wrong_logins_share_one_failure_counter() {
+        const THREADS: usize = 16;
+        let store = Arc::new(MemoryStore::default());
+        let service = Arc::new(AuthService::production(
+            Arc::clone(&store),
+            Arc::new(FakeClock::default()),
+        ));
+        let username = "u-test";
+        let secret = "correct-horse-1";
+        service.setup(username, secret, secret).unwrap();
+        service.lock();
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let mut handles = Vec::with_capacity(THREADS);
+        for i in 0..THREADS {
+            let service = Arc::clone(&service);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                service.login(username, &format!("wrong-{i:04}"))
+            }));
+        }
+        let mut bad = 0u32;
+        let mut throttled = 0usize;
+        for handle in handles {
+            match handle.join().expect("login thread") {
+                Err(LoginError::BadCredentials) => bad += 1,
+                Err(LoginError::Throttled { .. }) => throttled += 1,
+                other => panic!("unexpected login result: {other:?}"),
+            }
+        }
+        assert!(bad <= 5, "checked {bad} guesses, throttled {throttled}");
+        assert_eq!(bad as usize + throttled, THREADS);
+        let record: super::store::Record =
+            serde_json::from_str(&store.dump_all()).expect("stored record");
+        assert_eq!(record.failures, bad);
+    }
+
+    /// Two first-run writes must not both succeed. The later one is AlreadySet.
+    #[test]
+    fn concurrent_setup_allows_only_one_success() {
+        const THREADS: usize = 16;
+        let service = Arc::new(AuthService::production(
+            Arc::new(MemoryStore::default()),
+            Arc::new(FakeClock::default()),
+        ));
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let mut handles = Vec::with_capacity(THREADS);
+        for _ in 0..THREADS {
+            let service = Arc::clone(&service);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                service.setup("u-test", "correct-horse-1", "correct-horse-1")
+            }));
+        }
+        let mut ok = 0usize;
+        let mut already = 0usize;
+        for handle in handles {
+            match handle.join().expect("setup thread") {
+                Ok(()) => ok += 1,
+                Err(LoginError::AlreadySet) => already += 1,
+                Err(other) => panic!("unexpected setup result: {other}"),
+            }
+        }
+        assert_eq!(ok, 1, "ok={ok} already={already}");
+        assert_eq!(already, THREADS - 1);
     }
 }
