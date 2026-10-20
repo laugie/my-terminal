@@ -72,6 +72,9 @@ pub struct AuthService<S = MemoryStore, C = FakeClock> {
     store: Arc<S>,
     clock: Arc<C>,
     unlocked: Mutex<bool>,
+    /// Serializes setup and login. Held only inside those synchronous methods,
+    /// which commands run on a blocking thread, so it never crosses `.await`.
+    attempt: Mutex<()>,
     params: HashParams,
 }
 
@@ -95,6 +98,7 @@ where
             store,
             clock,
             unlocked: Mutex::new(false),
+            attempt: Mutex::new(()),
             params,
         }
     }
@@ -144,7 +148,10 @@ where
     }
 
     pub fn setup(&self, username: &str, secret: &str, confirm: &str) -> Result<(), LoginError> {
+        let _attempt = self.lock_attempt();
         validate_new_credentials(username, secret, confirm)?;
+        // Read again under the attempt lock so a concurrent setup cannot both
+        // observe an empty store and both write.
         if self.read_record()?.is_some() {
             return Err(LoginError::AlreadySet);
         }
@@ -163,6 +170,9 @@ where
     }
 
     pub fn login(&self, username: &str, secret: &str) -> Result<(), LoginError> {
+        let _attempt = self.lock_attempt();
+        // Read the record and the remaining wait only after the attempt lock
+        // is held, so overlapping callers share one failure counter.
         let Some(mut record) = self.read_record()? else {
             return Err(LoginError::BadCredentials);
         };
@@ -199,6 +209,10 @@ where
         self.write_record(&record)?;
         self.set_unlocked(true);
         Ok(())
+    }
+
+    fn lock_attempt(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.attempt.lock().unwrap_or_else(|err| err.into_inner())
     }
 
     fn is_unlocked(&self) -> bool {
