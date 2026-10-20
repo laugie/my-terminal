@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::session::args::{build_ssh_args_with_options, SshOptions};
 
 use super::parse::{Device, Topology};
-use super::validate::{identity_directive, index, region_of};
+use super::validate::{index, region_of};
 
 /// Arguments for one device, without a generated ssh config.
 ///
@@ -165,7 +165,6 @@ fn jump_spec(chain: &[&Device]) -> Result<Option<String>, String> {
 
 fn render_jump_config(chain: &[&Device]) -> Result<String, String> {
     let mut body = String::new();
-    let directive = identity_directive();
     for (index, hop) in chain.iter().enumerate() {
         let Some(key_path) = hop.identity_file.as_deref() else {
             continue;
@@ -183,7 +182,7 @@ fn render_jump_config(chain: &[&Device]) -> Result<String, String> {
         push_line(&mut body, &format!("    HostName {}", hop.host))?;
         push_line(&mut body, &format!("    User {}", hop.user))?;
         push_line(&mut body, &format!("    Port {}", hop.port))?;
-        push_line(&mut body, &format!("    {directive} {key_path}"))?;
+        push_line(&mut body, &format!("    IdentityFile {key_path}"))?;
         body.push('\n');
     }
     if body.is_empty() {
@@ -290,8 +289,10 @@ fn restrict_to_current_user(path: &Path) -> Result<(), String> {
 }
 
 /// Best effort: drop inherited ACEs, grant the current user, and remove the
-/// well-known Everyone / Authenticated Users / Users SIDs. `icacls` is spawned
-/// directly, not through a shell. The caller deletes the file if this fails.
+/// well-known Everyone / Authenticated Users / Users SIDs. `icacls.exe` is
+/// `%SystemRoot%\System32\icacls.exe` (SystemRoot is read the same way as
+/// `session/binary.rs`) and is spawned directly, not through a shell, with
+/// `CREATE_NO_WINDOW`. The caller deletes the file if this fails.
 #[cfg(windows)]
 fn restrict_to_current_user(path: &Path) -> Result<(), String> {
     let user =
@@ -303,14 +304,11 @@ fn restrict_to_current_user(path: &Path) -> Result<(), String> {
     {
         return Err("无法限制临时 ssh 配置的访问权限".to_string());
     }
-    let status = std::process::Command::new("icacls")
+    let status = icacls_command()
         .arg(path)
         .arg("/inheritance:r")
         .arg("/grant:r")
         .arg(format!("{user}:(F)"))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
         .status()
         .map_err(|_| "无法限制临时 ssh 配置的访问权限".to_string())?;
     if !status.success() {
@@ -318,17 +316,33 @@ fn restrict_to_current_user(path: &Path) -> Result<(), String> {
     }
     // Missing SIDs make icacls exit non-zero. That is still a tighter file
     // than the default DACL, so these removals are best-effort.
-    let _ = std::process::Command::new("icacls")
+    let _ = icacls_command()
         .arg(path)
         .arg("/remove:g")
         .arg("*S-1-1-0")
         .arg("*S-1-5-11")
         .arg("*S-1-5-32-545")
+        .status();
+    Ok(())
+}
+
+/// Absolute `icacls.exe` plus `CREATE_NO_WINDOW`, so a GUI session does not
+/// flash a console. SystemRoot falls back to `C:\Windows`, matching
+/// `session/binary.rs`.
+#[cfg(windows)]
+fn icacls_command() -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let root = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let mut command = std::process::Command::new(root.join("System32").join("icacls.exe"));
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status();
-    Ok(())
+        .creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 #[cfg(test)]

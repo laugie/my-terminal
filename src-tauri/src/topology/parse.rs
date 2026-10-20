@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 
 use super::args::check_device_tokens;
-use super::validate::{identity_field_name, validate_graph};
+use super::validate::validate_graph;
 
 /// One topology file. Device names are unique across every region.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,7 +108,6 @@ fn parse_device(value: &Value, region: &str) -> Result<Device, String> {
     let object = value
         .as_object()
         .ok_or_else(|| format!("{FILE_LABEL}:1:1 区域「{region}」中的设备必须是对象"))?;
-    let identity_key = identity_field_name();
     warn_unknown(
         object,
         &[
@@ -119,7 +118,7 @@ fn parse_device(value: &Value, region: &str) -> Result<Device, String> {
             "jump",
             "mobile",
             "tailscaleAddress",
-            identity_key.as_str(),
+            "identityFile",
         ],
         &format!("区域「{region}」."),
     );
@@ -135,7 +134,7 @@ fn parse_device(value: &Value, region: &str) -> Result<Device, String> {
     let mobile = parse_mobile(object.get("mobile"))
         .map_err(|err| format!("区域「{region}」设备「{name}」：{err}"))?;
     let tailscale_address = optional_string(object, "tailscaleAddress")?;
-    let identity_file = optional_string(object, &identity_key)?;
+    let identity_file = optional_string(object, "identityFile")?;
     Ok(Device {
         name,
         host,

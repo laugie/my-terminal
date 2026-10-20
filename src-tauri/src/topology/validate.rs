@@ -2,18 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use super::parse::{Device, Topology};
 
-pub(crate) fn identity_field_name() -> String {
-    let mut name = String::from("identity");
-    name.push_str("File");
-    name
-}
-
-pub(crate) fn identity_directive() -> String {
-    let mut name = String::from("Identi");
-    name.push_str("tyFile");
-    name
-}
-
 pub(crate) fn validate_graph(topology: &Topology) -> Result<(), String> {
     reject_duplicate_names(topology)?;
     reject_missing_jumps(topology)?;
