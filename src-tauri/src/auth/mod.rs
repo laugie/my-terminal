@@ -664,4 +664,39 @@ mod tests {
         assert_eq!(ok, 1, "ok={ok} already={already}");
         assert_eq!(already, THREADS - 1);
     }
+
+    /// 开关已经开着、口令已设、当前进程还没登录时，再次打开不能解锁。
+    #[test]
+    fn set_lock_on_while_already_enabled_does_not_unlock() {
+        let service = fresh();
+        let (username, secret) = (token("u"), token("p"));
+        service.setup(&username, &secret, &secret).unwrap();
+        service.lock();
+        service.set_lock_enabled(true);
+        assert!(!service.is_unlocked());
+        assert!(require_access(&service, true).is_err());
+
+        let _ = service.set_lock(true);
+
+        assert!(service.lock_enabled());
+        assert!(!service.is_unlocked(), "未登录时再次打开开关不能变成已解锁");
+        assert!(require_access(&service, service.lock_enabled()).is_err());
+    }
+
+    /// 开关从关到开：当前进程保持可用，下次启动才要求登录。
+    #[test]
+    fn set_lock_on_from_off_unlocks_this_process() {
+        let service = fresh();
+        let (username, secret) = (token("u"), token("p"));
+        service.setup(&username, &secret, &secret).unwrap();
+        service.lock();
+        assert!(!service.lock_enabled());
+        assert!(!service.is_unlocked());
+
+        service.set_lock(true).expect("从关到开");
+
+        assert!(service.lock_enabled());
+        assert!(service.is_unlocked());
+        assert!(require_access(&service, service.lock_enabled()).is_ok());
+    }
 }
