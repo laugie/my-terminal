@@ -58,6 +58,17 @@ impl std::fmt::Display for LoginError {
     }
 }
 
+/// Public view of the lock switch. It never includes the hash or the secret.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LockSettings {
+    pub login_lock_enabled: bool,
+    pub has_secret: bool,
+    pub read_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 /// Public view of the lock. It never includes the hash or the secret.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,8 +83,13 @@ pub struct AuthService<S = MemoryStore, C = FakeClock> {
     store: Arc<S>,
     clock: Arc<C>,
     unlocked: Mutex<bool>,
-    /// Serializes setup and login. Held only inside those synchronous methods,
-    /// which commands run on a blocking thread, so it never crosses `.await`.
+    /// Process gate. False skips the unlock check. Loaded once at startup.
+    /// Turning the switch off clears it immediately. Turning it on also marks
+    /// this process unlocked, so the current session keeps working; the next
+    /// launch reads the saved value and asks again.
+    gate_enabled: Mutex<bool>,
+    /// Serializes setup, login, and verify. Held only inside those synchronous
+    /// methods, which commands run on a blocking thread, so it never crosses `.await`.
     attempt: Mutex<()>,
     params: HashParams,
 }
@@ -98,8 +114,23 @@ where
             store,
             clock,
             unlocked: Mutex::new(false),
+            gate_enabled: Mutex::new(false),
             attempt: Mutex::new(()),
             params,
+        }
+    }
+
+    pub fn lock_enabled(&self) -> bool {
+        match self.gate_enabled.lock() {
+            Ok(guard) => *guard,
+            Err(poisoned) => *poisoned.into_inner(),
+        }
+    }
+
+    pub fn set_lock_enabled(&self, enabled: bool) {
+        match self.gate_enabled.lock() {
+            Ok(mut guard) => *guard = enabled,
+            Err(poisoned) => *poisoned.into_inner() = enabled,
         }
     }
 
@@ -173,9 +204,32 @@ where
         let _attempt = self.lock_attempt();
         // Read the record and the remaining wait only after the attempt lock
         // is held, so overlapping callers share one failure counter.
-        let Some(mut record) = self.read_record()? else {
+        let Some(record) = self.read_record()? else {
             return Err(LoginError::BadCredentials);
         };
+        self.authenticate(record, username, secret, true)
+    }
+
+    /// Check the current username and secret before the lock is turned off.
+    ///
+    /// Uses the same attempt lock and failure counter as [`Self::login`].
+    /// No stored record means there is nothing to check. Success leaves the
+    /// hash, the failure counter, and the in-memory unlock flag unchanged.
+    pub fn verify_current(&self, username: &str, secret: &str) -> Result<(), LoginError> {
+        let _attempt = self.lock_attempt();
+        let Some(record) = self.read_record()? else {
+            return Ok(());
+        };
+        self.authenticate(record, username, secret, false)
+    }
+
+    fn authenticate(
+        &self,
+        mut record: Record,
+        username: &str,
+        secret: &str,
+        unlock_on_success: bool,
+    ) -> Result<(), LoginError> {
         let now = self.clock.now_ms();
         let mut deadline = Deadline {
             not_before_ms: record.not_before_ms,
@@ -203,12 +257,18 @@ where
             self.write_record(&record)?;
             return Err(LoginError::BadCredentials);
         }
-        record.failures = 0;
-        record.not_before_ms = 0;
-        record.last_seen_ms = now;
-        self.write_record(&record)?;
-        self.set_unlocked(true);
+        if unlock_on_success {
+            record.failures = 0;
+            record.not_before_ms = 0;
+            record.last_seen_ms = now;
+            self.write_record(&record)?;
+            self.set_unlocked(true);
+        }
         Ok(())
+    }
+
+    fn has_secret(&self) -> Result<bool, LoginError> {
+        Ok(self.read_record()?.is_some())
     }
 
     fn lock_attempt(&self) -> std::sync::MutexGuard<'_, ()> {
@@ -256,6 +316,49 @@ where
         Ok(())
     } else {
         Err(LoginError::Locked)
+    }
+}
+
+/// Gate used by host, session, and topology commands.
+///
+/// A disabled lock allows the call. An enabled lock is the same check as
+/// [`require_unlocked`]: fail closed until this process has logged in.
+pub fn require_access<S, C>(
+    service: &AuthService<S, C>,
+    lock_enabled: bool,
+) -> Result<(), LoginError>
+where
+    S: SecretStore,
+    C: Clock,
+{
+    if !lock_enabled {
+        return Ok(());
+    }
+    require_unlocked(service)
+}
+
+/// Where startup should go. A disabled lock always opens the home page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupRoute {
+    Home,
+    Login,
+    Setup,
+    Unavailable,
+}
+
+pub fn startup_route<S, C>(service: &AuthService<S, C>, lock_enabled: bool) -> StartupRoute
+where
+    S: SecretStore,
+    C: Clock,
+{
+    if !lock_enabled {
+        return StartupRoute::Home;
+    }
+    match service.status() {
+        AuthStatus::NeedsSetup => StartupRoute::Setup,
+        AuthStatus::Locked => StartupRoute::Login,
+        AuthStatus::Unlocked => StartupRoute::Home,
+        AuthStatus::Unavailable => StartupRoute::Unavailable,
     }
 }
 
@@ -347,6 +450,72 @@ pub async fn auth_login(
     })
     .await
     .map_err(|_| "登录失败".to_string())?
+}
+
+/// Read the lock switch and whether a secret has already been stored.
+///
+/// The config read runs on a blocking thread. No lock is held across `.await`.
+#[tauri::command]
+pub async fn auth_settings(app: tauri::AppHandle) -> Result<LockSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || read_lock_settings(&app))
+        .await
+        .map_err(|_| "无法读取设置".to_string())?
+}
+
+/// Turn the startup lock on or off.
+///
+/// Turning it off when a secret exists requires `username` and `secret`.
+/// A wrong pair counts toward the same delay as login and shares its attempt
+/// lock. The hash is not removed. Disk writes run on a blocking thread, and
+/// that lock does not cross `.await`.
+#[tauri::command]
+pub async fn auth_set_lock(
+    app: tauri::AppHandle,
+    enabled: bool,
+    username: Option<String>,
+    secret: Option<String>,
+) -> Result<LockSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AuthState>();
+        if enabled {
+            if !state.has_secret().map_err(|err| err.to_string())? {
+                return Err("请先设置用户名和口令".to_string());
+            }
+        } else {
+            state
+                .verify_current(
+                    username.as_deref().unwrap_or(""),
+                    secret.as_deref().unwrap_or(""),
+                )
+                .map_err(|err| err.to_string())?;
+        }
+        app.state::<crate::hosts::HostState>()
+            .set_login_lock_enabled(enabled)?;
+        state.set_lock_enabled(enabled);
+        if enabled {
+            // The saved flag applies on the next launch. This process stays open.
+            state.set_unlocked(true);
+        }
+        read_lock_settings(&app)
+    })
+    .await
+    .map_err(|_| "无法保存设置".to_string())?
+}
+
+fn read_lock_settings(app: &tauri::AppHandle) -> Result<LockSettings, String> {
+    let view = app
+        .state::<crate::hosts::HostState>()
+        .login_lock_view()?;
+    let has_secret = app
+        .state::<AuthState>()
+        .has_secret()
+        .map_err(|err| err.to_string())?;
+    Ok(LockSettings {
+        login_lock_enabled: view.enabled,
+        has_secret,
+        read_only: view.read_only,
+        message: view.message,
+    })
 }
 
 #[cfg(test)]

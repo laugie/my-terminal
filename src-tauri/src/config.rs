@@ -82,9 +82,18 @@ impl From<serde_json::Error> for ConfigError {
     }
 }
 
-/// Placeholder for later settings. Serialized as `{}`.
+/// Local settings. `login_lock_enabled` is omitted when false so an old
+/// `settings: {}` file stays byte-compatible and means the lock is off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct Settings {}
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub login_lock_enabled: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,6 +165,20 @@ pub fn load_config(dir: &Path) -> Result<Config, ConfigError> {
         Ok(config) => Ok(config),
         Err(_) => reset_corrupt(dir, &path),
     }
+}
+
+/// Set `settings.loginLockEnabled` and write `config.json` atomically.
+///
+/// Other fields, including manual hosts, are loaded and written back.
+/// A newer-version file is left untouched.
+pub fn set_login_lock_enabled(dir: &Path, enabled: bool) -> Result<(), ConfigError> {
+    let mut config = load_config(dir)?;
+    if config.read_only || config.version > CONFIG_VERSION {
+        return Err(ConfigError::ReadOnly);
+    }
+    config.settings.login_lock_enabled = enabled;
+    config.notice = None;
+    save_config(dir, &config)
 }
 
 /// Pretty-print `config` as UTF-8 and replace `config.json` atomically.
@@ -345,6 +368,14 @@ fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
 
 type SaveHook = Box<dyn Fn(&Path, &[u8]) -> Result<(), String> + Send>;
 
+/// In-memory view of the login-lock switch. `message` is a config notice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginLockView {
+    pub enabled: bool,
+    pub read_only: bool,
+    pub message: Option<String>,
+}
+
 /// Manual servers stored in `config.json`. `add` and `remove` write immediately.
 pub struct JsonHostStore {
     dir: PathBuf,
@@ -387,6 +418,34 @@ impl JsonHostStore {
 
     pub fn notice(&self) -> Option<&str> {
         self.config.notice.as_deref()
+    }
+
+    pub fn login_lock_view(&self) -> LoginLockView {
+        let message = if self.config.read_only {
+            self.config
+                .write_error
+                .clone()
+                .or_else(|| self.config.notice.clone())
+        } else {
+            self.config.notice.clone()
+        };
+        LoginLockView {
+            enabled: self.config.settings.login_lock_enabled,
+            read_only: self.config.read_only,
+            message,
+        }
+    }
+
+    /// Update the switch in this store and on disk together, so a later host
+    /// save cannot write the previous flag back over it.
+    pub fn set_login_lock_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        self.ensure_writable()?;
+        let mut next = self.config.clone();
+        next.settings.login_lock_enabled = enabled;
+        next.version = CONFIG_VERSION;
+        self.persist(&next)?;
+        self.config = next;
+        Ok(())
     }
 
     pub fn list(&self) -> Vec<ManualHost> {

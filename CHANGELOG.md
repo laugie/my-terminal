@@ -3,6 +3,9 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
 ## [Unreleased]
+### Changed
+- 启动默认进入拓扑首页。登录锁改为顶栏设置里的开关，默认关闭，记在本机 `config.json` 的 `settings.loginLockEnabled`。旧配置没有这个字段时视为关闭。打开后从下次启动起要求登录；还没设过口令时会立即进入设置，成功后才保存。关闭立即生效，已设过口令时须先验证，失败与登录共用等待时间和同一把尝试锁。哈希仍留在系统凭据库。配置损坏重置后开关为关闭并提示；配置来自更新版本时开关只读。
+
 ### Fixed
 - macOS 从 Finder 启动时，Tailscale 状态不再因 App 包内二进制进入 GUI 模式而解析失败。查找 CLI 时在 PATH 之后检查 `/usr/local/bin`、`/opt/homebrew/bin` 和 App 包内路径；调用时直接 spawn 并设置 `TERM=dumb`。状态 JSON 容忍 null 与单个坏节点，失败原因显示在主机列表上方。
 

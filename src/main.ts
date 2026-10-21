@@ -9,12 +9,16 @@ import {
 import { loadTopology, type TopologyView } from "./topology.ts";
 import { renderTopology } from "./topology-view.ts";
 import { TAB_LIMIT_MESSAGE, mountTerminal } from "./terminal.ts";
+import { authSettings, authStatus, type AuthStateName } from "./auth.ts";
 import { mountLogin } from "./login.ts";
+import { mountSettings } from "./settings.ts";
+import { startupRoute } from "./startup.ts";
 
-const app = document.querySelector("#app");
-if (!(app instanceof HTMLElement)) {
+const appElement = document.querySelector("#app");
+if (!(appElement instanceof HTMLElement)) {
   throw new Error("missing #app");
 }
+const app: HTMLElement = appElement;
 
 type Page = "topology" | "manual";
 
@@ -30,7 +34,18 @@ const refreshButton = document.createElement("button");
 refreshButton.type = "button";
 refreshButton.className = "button";
 refreshButton.textContent = "重新加载";
-header.append(title, nav, refreshButton);
+const actions = el("div", "top-actions");
+const settingsSlot = el("div", "settings-slot");
+const settingsButton = document.createElement("button");
+settingsButton.type = "button";
+settingsButton.className = "button";
+settingsButton.setAttribute("aria-label", "设置");
+settingsButton.setAttribute("aria-expanded", "false");
+settingsButton.textContent = "⚙";
+settingsSlot.append(settingsButton);
+actions.append(refreshButton, settingsSlot);
+header.append(title, nav, actions);
+mountSettings(settingsButton);
 
 const statusBar = el("div", "status");
 statusBar.setAttribute("role", "status");
@@ -113,12 +128,43 @@ form.addEventListener("submit", (event) => {
   void onAdd();
 });
 
-mountLogin(app, () => {
+void start();
+
+async function start(): Promise<void> {
+  const route = await resolveStartupRoute();
+  if (route === "home") {
+    enterApp();
+    return;
+  }
+  mountLogin(app, () => {
+    enterApp();
+  });
+}
+
+async function resolveStartupRoute(): Promise<ReturnType<typeof startupRoute>> {
+  let lockEnabled = false;
+  try {
+    const settings = await authSettings();
+    lockEnabled = settings.loginLockEnabled;
+  } catch {
+    lockEnabled = false;
+  }
+  let authState: AuthStateName = "unavailable";
+  try {
+    const snapshot = await authStatus();
+    authState = snapshot.state;
+  } catch {
+    authState = "unavailable";
+  }
+  return startupRoute({ lockEnabled, authState });
+}
+
+function enterApp(): void {
   signedIn = true;
   shell.hidden = false;
   showPage("topology");
   void refreshTopology();
-});
+}
 
 function showPage(next: Page): void {
   page = next;

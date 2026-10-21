@@ -11,15 +11,24 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let dir = config::resolve_app_config_dir(app.handle())?;
-            app.manage(hosts::HostState::open(&dir));
+            let hosts = hosts::HostState::open(&dir);
+            let lock_enabled = hosts
+                .login_lock_view()
+                .map(|view| view.enabled)
+                .unwrap_or(false);
+            let auth = auth::open_state();
+            auth.set_lock_enabled(lock_enabled);
+            app.manage(hosts);
             app.manage(session::SessionState::new());
-            app.manage(auth::open_state());
+            app.manage(auth);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             auth::auth_status,
             auth::auth_setup,
             auth::auth_login,
+            auth::auth_settings,
+            auth::auth_set_lock,
             hosts::list_hosts,
             hosts::add_manual_host,
             hosts::remove_manual_host,
