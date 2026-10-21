@@ -77,6 +77,28 @@ test("svg: groups, icons, edges, mobile badge, visible name and address, a11y", 
   assert.equal((svg.match(/tabindex="0"/g) ?? []).length, 6);
 });
 
+test("svg: unconnectable device nodes are aria-disabled and the title includes the old hint", () => {
+  const render = renderDiagramSvg as (
+    model: ReturnType<typeof buildDiagram>,
+    options?: { canOpen?: boolean },
+  ) => string;
+  const blocked = render(buildDiagram(VIEW), { canOpen: false });
+  const devices = blocked.split('<g class="device').slice(1);
+  assert.equal(devices.length, 6);
+  for (const device of devices) {
+    const openTag = device.slice(0, device.indexOf(">"));
+    assert.ok(openTag.includes('aria-disabled="true"'), openTag);
+    const title = device.match(/<title>([^<]*)<\/title>/)?.[1] ?? "";
+    assert.ok(title.includes("最多 8 个标签"), title);
+  }
+  const mac = devices.find((device) => device.includes("my-macbook")) ?? "";
+  const macTitle = mac.match(/<title>([^<]*)<\/title>/)?.[1] ?? "";
+  assert.ok(macTitle.includes("移动设备") && macTitle.includes("最多 8 个标签"), macTitle);
+  const open = render(buildDiagram(VIEW), { canOpen: true });
+  assert.equal(open.includes('aria-disabled="true"'), false);
+  assert.equal(open.includes("最多 8 个标签"), false);
+});
+
 test("svg escapes names", () => {
   const v = { ...VIEW, regions: [{ name: "<r>", devices: [dev('a"<b>&')] }] } as unknown as TopologyView;
   const svg = renderDiagramSvg(buildDiagram(v));
