@@ -12,3 +12,13 @@ commands.allow = ["auth_setup"]
 identifier = "allow-auth-login"
 description = "Enables the auth_login command without any pre-configured scope."
 commands.allow = ["auth_login"]
+
+[[permission]]
+identifier = "allow-auth-settings"
+description = "Enables the auth_settings command without any pre-configured scope."
+commands.allow = ["auth_settings"]
+
+[[permission]]
+identifier = "allow-auth-set-lock"
+description = "Enables the auth_set_lock command without any pre-configured scope."
+commands.allow = ["auth_set_lock"]

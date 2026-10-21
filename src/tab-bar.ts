@@ -3,6 +3,7 @@ import { statusLabel, type TabModel, type TabStrip } from "./tabs.ts";
 export interface TabBar {
   render(strip: TabStrip): void;
   setAlert(message: string): void;
+  end: HTMLElement;
 }
 
 export function mountTabBar(
@@ -40,7 +41,8 @@ export function mountTabBar(
   alert.setAttribute("role", "alert");
   alert.hidden = true;
 
-  bar.append(fresh, list, reconnect);
+  const end = el("div", "tabbar-end");
+  bar.append(fresh, list, reconnect, end);
   parent.prepend(bar, alert);
 
   function render(strip: TabStrip): void {
@@ -98,6 +100,7 @@ export function mountTabBar(
 
   return {
     render,
+    end,
     setAlert(message: string): void {
       alert.textContent = message;
       alert.hidden = message === "";

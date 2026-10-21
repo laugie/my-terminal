@@ -8,6 +8,8 @@
     "allow-auth-status",
     "allow-auth-setup",
     "allow-auth-login",
+    "allow-auth-settings",
+    "allow-auth-set-lock",
     "allow-list-hosts",
     "allow-add-manual-host",
     "allow-remove-manual-host",

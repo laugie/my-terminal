@@ -12,12 +12,16 @@ import { mountTerminal, type TerminalHost } from "./terminal.ts";
 import { mountTabBar, type TabBar } from "./tab-bar.ts";
 import { closeSession } from "./session.ts";
 import { sessionLimitMessage, TabStrip, type ShortcutAction } from "./tabs.ts";
+import { authSettings, authStatus, type AuthStateName } from "./auth.ts";
 import { mountLogin } from "./login.ts";
+import { mountSettings } from "./settings.ts";
+import { startupRoute } from "./startup.ts";
 
-const app = document.querySelector("#app");
-if (!(app instanceof HTMLElement)) {
+const appElement = document.querySelector("#app");
+if (!(appElement instanceof HTMLElement)) {
   throw new Error("missing #app");
 }
+const app: HTMLElement = appElement;
 
 type Page = "topology" | "manual";
 
@@ -144,6 +148,17 @@ const terminal = mountTerminal(terminalPanel, {
 host.terminal = terminal;
 tabBar.render(strip);
 
+const settingsSlot = el("div", "settings-slot");
+const settingsButton = document.createElement("button");
+settingsButton.type = "button";
+settingsButton.className = "button";
+settingsButton.setAttribute("aria-label", "设置");
+settingsButton.setAttribute("aria-expanded", "false");
+settingsButton.textContent = "⚙";
+settingsSlot.append(settingsButton);
+tabBar.end.append(settingsSlot);
+mountSettings(settingsButton);
+
 let page: Page = "topology";
 let signedIn = false;
 let refreshGeneration = 0;
@@ -174,12 +189,43 @@ form.addEventListener("submit", (event) => {
   void onAdd();
 });
 
-mountLogin(app, () => {
+void start();
+
+async function start(): Promise<void> {
+  const route = await resolveStartupRoute();
+  if (route === "home") {
+    enterApp();
+    return;
+  }
+  mountLogin(app, () => {
+    enterApp();
+  });
+}
+
+async function resolveStartupRoute(): Promise<ReturnType<typeof startupRoute>> {
+  let lockEnabled = false;
+  try {
+    const settings = await authSettings();
+    lockEnabled = settings.loginLockEnabled;
+  } catch {
+    lockEnabled = false;
+  }
+  let authState: AuthStateName = "unavailable";
+  try {
+    const snapshot = await authStatus();
+    authState = snapshot.state;
+  } catch {
+    authState = "unavailable";
+  }
+  return startupRoute({ lockEnabled, authState });
+}
+
+function enterApp(): void {
   signedIn = true;
   shell.hidden = false;
   showPage("topology");
   void refreshTopology();
-});
+}
 
 function showPage(next: Page): void {
   page = next;

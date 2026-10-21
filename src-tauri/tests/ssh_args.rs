@@ -110,8 +110,8 @@ fn implementation_sources_do_not_embed_forbidden_ssh_options() {
     }
 }
 
-/// `password` outside the three exact paths still fails. The three allowed
-/// files still fail for every other forbidden word.
+/// `password` outside the exact allowlisted paths still fails. Those files
+/// still fail for every other forbidden word.
 #[test]
 fn password_outside_allowlisted_files_still_fails() {
     let sample = "type=\"password\"";
@@ -126,6 +126,9 @@ fn password_outside_allowlisted_files_still_fails() {
         Path::new("src-tauri/src/hosts/mod.rs"),
         Path::new("other/src/login.ts"),
         Path::new(r"src-tauri\src\auth\store.rs.bak"),
+        Path::new("src/startup.tsx"),
+        Path::new("other/src/startup.ts"),
+        Path::new("src/startup.ts.bak"),
     ];
     for path in outside {
         assert_eq!(
@@ -141,6 +144,10 @@ fn password_outside_allowlisted_files_still_fails() {
         Path::new(r"src-tauri\src\auth\store.rs"),
         Path::new("src/login.ts"),
         Path::new("src-tauri/../src/login.ts"),
+        Path::new("src/startup.ts"),
+        Path::new("src/startup.test.ts"),
+        Path::new(r"src\startup.ts"),
+        Path::new("src-tauri/../src/startup.test.ts"),
     ];
     for path in allowed {
         assert_eq!(
@@ -285,17 +292,22 @@ fn forbidden_option_in_source<'a>(
 }
 
 /// #15 登录锁要在下面三个文件里写出 password 这个词。维护者已批准。
+/// #19 再放行两个精确路径：登录锁开关逻辑，只涉及是否已设口令的布尔状态。
 /// 比较前把 `\` 换成 `/`，再取仓库相对路径，必须和下列路径完全相等。
-/// 不是 `src/auth/` 的目录前缀，其他禁用词也不在这里放行。
+/// 不是目录前缀，其他禁用词也不在这里放行。
 ///
 /// - `src-tauri/src/auth/hash.rs`：argon2 的 `password_hash` API（`PasswordHash`、`hash_password`、`verify_password`）就叫这个词。
 /// - `src-tauri/src/auth/store.rs`：keyring 的 `get_password` / `set_password` 就叫这个词。
 /// - `src/login.ts`：HTML 口令框的 `type` 必须是 `password`。
+/// - `src/startup.ts`：登录锁开关逻辑，只涉及是否已设口令的布尔状态。
+/// - `src/startup.test.ts`：登录锁开关逻辑，只涉及是否已设口令的布尔状态。
 fn password_allowlisted(path: &Path) -> bool {
     const ALLOWED: &[&str] = &[
         "src-tauri/src/auth/hash.rs",
         "src-tauri/src/auth/store.rs",
         "src/login.ts",
+        "src/startup.ts",
+        "src/startup.test.ts",
     ];
     let normalized = lexical_normalize(&path.to_string_lossy().replace('\\', "/"));
     let relative = strip_repo_root(&normalized);

@@ -341,6 +341,54 @@ body {
   color: #e6c98a;
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-slot {
+  position: relative;
+}
+
+.settings-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 3;
+  box-sizing: border-box;
+  width: min(320px, calc(100vw - 40px));
+  padding: 16px;
+  background: #252526;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+.settings-popover[hidden] {
+  display: none;
+}
+
+.settings-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-notice {
+  min-height: 1.2em;
+  margin: 8px 0 0;
+  color: #e6c98a;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-prompt {
+  margin-top: 12px;
+}
+
 .terminal-panel {
   display: flex;
   flex-direction: column;
@@ -558,8 +606,15 @@ body {
 }
 
 .tabbar-new,
-.tabbar-reconnect {
+.tabbar-reconnect,
+.tabbar-end {
   flex: none;
+}
+
+.tabbar-end {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
 }
 
 .tabbar-alert {
