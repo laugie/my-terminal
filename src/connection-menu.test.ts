@@ -94,7 +94,7 @@ test("session invoke sends connectionName only when a relay is chosen", () => {
   });
 });
 
-test("connection menu lists both methods and refuses jump-host password login", () => {
+test("connection menu lists both methods and refuses a jump-host secret prompt", () => {
   const html = renderConnectionMenu('a<b>&"', ["经跳板命令", "x<y"]);
   assert.equal(html.includes('role="menu"'), true);
   assert.equal(html.includes('role="menuitem"'), true);

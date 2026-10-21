@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { topologySessionFields } from "./connection-menu.js";
 import type { SessionEvent } from "./session.ts";
 
 export type Presence = "online" | "offline" | "unknown" | "none";
@@ -14,6 +15,8 @@ export interface TopologyDevice {
   type?: string;
   /** Jump target device name. Omitted when the device has no jump. */
   jump?: string;
+  /** Command-relay names. Empty or omitted when the device only has the default method. */
+  connections?: string[];
 }
 
 export interface TopologyRegion {
@@ -32,15 +35,16 @@ export function loadTopology(): Promise<TopologyView> {
   return invoke<TopologyView>("load_topology");
 }
 
-/** The backend looks the device up. This call does not send a host or jump. */
+/** The backend looks the device up. This call does not send a host, jump, or command. */
 export function openTopologyDevice(
   deviceName: string,
   onEvent: (event: SessionEvent) => void,
+  connectionName?: string | null,
 ): Promise<{ id: string }> {
   const onEventChannel = new Channel<SessionEvent>();
   onEventChannel.onmessage = onEvent;
   return invoke<{ id: string }>("open_session", {
-    deviceName,
+    ...topologySessionFields(deviceName, connectionName),
     onEvent: onEventChannel,
   });
 }

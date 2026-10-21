@@ -1,4 +1,5 @@
 import { iconSymbols } from "./icons.js";
+import { TAB_LIMIT_MESSAGE } from "./tabs.js";
 import type { Presence, TopologyView } from "./topology.js";
 
 export type DeviceKind = "server" | "mac" | "windows" | "router" | "nas" | "cloud" | "generic";
@@ -28,7 +29,7 @@ const CONTAINER_W = 1040;
 const ICON = 48;
 const ICON_X = (NODE_W - ICON) / 2;
 const ICON_Y = 6;
-const OPEN_LIMIT_HINT = "最多 8 个标签";
+const OPEN_LIMIT_HINT = TAB_LIMIT_MESSAGE;
 
 export interface DiagramGroup {
   name: string;

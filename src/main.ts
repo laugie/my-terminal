@@ -96,7 +96,7 @@ const tabBar: TabBar = mountTabBar(shell, {
 
 const host: { terminal: TerminalHost | null } = { terminal: null };
 const strip: TabStrip = new TabStrip({
-  openSession(name: string): Promise<{ id: string }> {
+  openSession(name: string, connectionName?: string): Promise<{ id: string }> {
     const opener = host.terminal;
     if (!opener) {
       throw new Error("无法打开标签");
@@ -105,13 +105,14 @@ const strip: TabStrip = new TabStrip({
       (item) =>
         item.track === "device" &&
         item.deviceName === name &&
+        item.connectionName === connectionName &&
         item.sessionId === undefined &&
         item.status === "connecting",
     );
     if (!tab) {
       throw new Error("无法打开标签");
     }
-    return opener.openDevice(tab.key, name);
+    return opener.openDevice(tab.key, name, connectionName);
   },
   closeSession: (id) => closeSession(id),
   limit: 8,
@@ -313,7 +314,7 @@ function requestClose(key: string): void {
   present(strip.activeKey);
 }
 
-async function connectDevice(name: string): Promise<void> {
+async function connectDevice(name: string, connectionName?: string | null): Promise<void> {
   if (!strip.canOpen()) {
     tabBar.setAlert(sessionLimitMessage(strip.maxSessions()));
     markActive();
@@ -322,7 +323,7 @@ async function connectDevice(name: string): Promise<void> {
   tabBar.setAlert("");
   terminalPanel.hidden = false;
   try {
-    const pending = strip.openDevice(name);
+    const pending = strip.openDevice(name, connectionName || undefined);
     present(strip.activeKey);
     await pending;
     present(strip.activeKey);
@@ -420,8 +421,8 @@ function paintTopology(): void {
   }
   const active = strip.tabs.find((item) => item.key === strip.activeKey);
   renderTopology(topologyRoot, topologyView, {
-    onConnect: (name) => {
-      void connectDevice(name);
+    onConnect: (name, connectionName) => {
+      void connectDevice(name, connectionName);
     },
     activeName: active?.track === "device" ? active.deviceName ?? null : null,
     canOpen: strip.canOpen(),

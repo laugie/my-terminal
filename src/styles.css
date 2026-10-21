@@ -568,6 +568,59 @@ body {
   cursor: default;
 }
 
+.connection-menu-host {
+  margin: 0 0 12px;
+}
+
+.connection-menu {
+  box-sizing: border-box;
+  width: min(420px, 100%);
+  padding: 12px;
+  background: #252526;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+.connection-menu-title {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.connection-menu [role="menuitem"] {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  text-align: left;
+}
+
+.connection-menu [role="menuitem"]:focus-visible {
+  outline: 2px solid #4c6f8a;
+  outline-offset: 2px;
+}
+
+.relay-command-label {
+  display: block;
+  margin-top: 8px;
+}
+
+.relay-command-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.relay-command-error {
+  min-height: 1.2em;
+  margin: 4px 0 0;
+  color: #e6c98a;
+}
+
+.connection-menu-note {
+  margin: 8px 0 0;
+  color: #9a9a9a;
+}
+
 .diagram .jump-edge {
   fill: none;
   stroke: #8eb4d4;
