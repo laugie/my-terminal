@@ -29,11 +29,18 @@ export function renderTopology(
   }
 
   const scroll = el("div", "diagram-scroll");
-  scroll.innerHTML = renderDiagramSvg(buildDiagram(view));
+  scroll.innerHTML = renderDiagramSvg(buildDiagram(view), { canOpen: actions.canOpen });
   for (const node of scroll.querySelectorAll<SVGElement>(".device")) {
     const name = node.dataset.deviceName ?? "";
     if (name === actions.activeName) {
       node.classList.add("device-active");
+    }
+    if (!actions.canOpen && !node.dataset.openTitle) {
+      const text = node.querySelector("title")?.textContent ?? "";
+      const suffix = ` ${OPEN_LIMIT_HINT}`;
+      if (text.endsWith(suffix)) {
+        node.dataset.openTitle = text.slice(0, -suffix.length);
+      }
     }
     bindDeviceActivation(node, name, (deviceName) => {
       actions.onConnect(deviceName);
