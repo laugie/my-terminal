@@ -83,10 +83,12 @@ pub struct AuthService<S = MemoryStore, C = FakeClock> {
     store: Arc<S>,
     clock: Arc<C>,
     unlocked: Mutex<bool>,
-    /// Process gate. False skips the unlock check. Loaded once at startup.
-    /// Turning the switch off clears it immediately. Turning it on also marks
-    /// this process unlocked, so the current session keeps working; the next
-    /// launch reads the saved value and asks again.
+    /// Process gate. False skips the unlock check. Loaded once at startup
+    /// through [`Self::set_lock_enabled`], which does not change the unlock flag.
+    /// Turning the switch off clears the gate immediately. Turning it on from
+    /// off, via [`Self::set_lock`], marks this process unlocked so the current
+    /// session keeps working. Turning it on when it was already on leaves the
+    /// unlock flag unchanged. The next launch reads the saved value and asks again.
     gate_enabled: Mutex<bool>,
     /// Serializes setup, login, and verify. Held only inside those synchronous
     /// methods, which commands run on a blocking thread, so it never crosses `.await`.
@@ -132,6 +134,23 @@ where
             Ok(mut guard) => *guard = enabled,
             Err(poisoned) => *poisoned.into_inner() = enabled,
         }
+    }
+
+    /// Apply the in-memory gate.
+    ///
+    /// The attempt lock is held across the read of the previous value and the
+    /// write. Enabling a gate that was off marks this process unlocked so the
+    /// current session keeps working. Enabling a gate that was already on does
+    /// not change the unlock flag, so a locked process cannot unlock itself by
+    /// setting the switch again. Disabling never changes the unlock flag.
+    pub fn set_lock(&self, enabled: bool) -> Result<(), LoginError> {
+        let _attempt = self.lock_attempt();
+        let was_enabled = self.lock_enabled();
+        self.set_lock_enabled(enabled);
+        if enabled && !was_enabled {
+            self.set_unlocked(true);
+        }
+        Ok(())
     }
 
     pub fn status(&self) -> AuthStatus {
@@ -466,8 +485,14 @@ pub async fn auth_settings(app: tauri::AppHandle) -> Result<LockSettings, String
 ///
 /// Turning it off when a secret exists requires `username` and `secret`.
 /// A wrong pair counts toward the same delay as login and shares its attempt
-/// lock. The hash is not removed. Disk writes run on a blocking thread, and
-/// that lock does not cross `.await`.
+/// lock. The hash is not removed.
+///
+/// Turning it on keeps this process usable only when the gate was previously
+/// off. If the gate was already on, the unlock flag stays as it is, so a
+/// locked process cannot unlock itself by setting the switch again.
+/// Disk writes run on a blocking thread. `verify_current` releases the attempt
+/// lock before [`AuthService::set_lock`] takes it again, and that lock does
+/// not cross `.await`.
 #[tauri::command]
 pub async fn auth_set_lock(
     app: tauri::AppHandle,
@@ -491,11 +516,7 @@ pub async fn auth_set_lock(
         }
         app.state::<crate::hosts::HostState>()
             .set_login_lock_enabled(enabled)?;
-        state.set_lock_enabled(enabled);
-        if enabled {
-            // The saved flag applies on the next launch. This process stays open.
-            state.set_unlocked(true);
-        }
+        state.set_lock(enabled).map_err(|err| err.to_string())?;
         read_lock_settings(&app)
     })
     .await
