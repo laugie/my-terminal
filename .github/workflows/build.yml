@@ -48,6 +48,12 @@ jobs:
       - name: Cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Relay sshd integration
+        if: matrix.os == 'macos-latest'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test relay_sshd -- --ignored --nocapture
+        env:
+          MT_SSHD_IT: "1"
+
       - name: Build
         run: npm run tauri build
 
