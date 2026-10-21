@@ -298,19 +298,25 @@ pub async fn open_session(
     user: Option<String>,
     port: Option<u16>,
     device_name: Option<String>,
+    connection_name: Option<String>,
     on_event: tauri::ipc::Channel<SessionEvent>,
 ) -> Result<OpenSessionResponse, String> {
     {
         let auth = app.state::<crate::auth::AuthState>();
         crate::auth::require_access(&auth, auth.lock_enabled())
     }
-        .map_err(|err| err.to_string())?;
+    .map_err(|err| err.to_string())?;
+    let connection_name = connection_name.filter(|name| !name.is_empty());
     let mut planned = if let Some(device_name) = device_name.filter(|name| !name.is_empty()) {
         let app_for_load = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let dir = crate::config::resolve_app_config_dir(&app_for_load)
                 .map_err(|_| "无法定位配置目录".to_string())?;
-            crate::topology::plan_device_session(&dir, &device_name)
+            crate::topology::plan_device_session_with(
+                &dir,
+                &device_name,
+                connection_name.as_deref(),
+            )
         })
         .await
         .map_err(|_| "读取拓扑配置失败".to_string())??
@@ -319,10 +325,12 @@ pub async fn open_session(
         crate::topology::SessionPlan {
             args: build_ssh_args(&SshTarget { host, user, port })?,
             temp_file: None,
+            relay: None,
         }
     };
     let args = std::mem::take(&mut planned.args);
     let mut temp_file = planned.temp_file.take();
+    let relay_ends = planned.relay.take();
     let id = app.state::<SessionState>().begin()?;
     let mut reservation = Reservation {
         app: app.clone(),
@@ -333,8 +341,43 @@ pub async fn open_session(
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let started = (|| {
             let program = resolve_ssh_binary()?;
-            pty::start_pty(&program, &args, move |event| {
-                on_event.send(event).map(|_| ()).map_err(|_| ())
+            let captured = Mutex::new(Vec::<u8>::new());
+            pty::start_pty(&program, &args, move |event| match event {
+                SessionEvent::Data { bytes } => {
+                    {
+                        let mut buf = captured.lock().unwrap_or_else(PoisonError::into_inner);
+                        buf.extend_from_slice(&bytes);
+                        const CAP: usize = 64 * 1024;
+                        if buf.len() > CAP {
+                            let extra = buf.len() - CAP;
+                            buf.drain(..extra);
+                        }
+                    }
+                    on_event
+                        .send(SessionEvent::Data { bytes })
+                        .map(|_| ())
+                        .map_err(|_| ())
+                }
+                SessionEvent::Exit { code } => {
+                    if let (Some(ends), Some(code_value)) = (relay_ends.as_ref(), code) {
+                        let text = {
+                            let buf = captured.lock().unwrap_or_else(PoisonError::into_inner);
+                            String::from_utf8_lossy(&buf).into_owned()
+                        };
+                        if let Some(line) =
+                            crate::topology::relay_failure_line(&text, code_value, ends)
+                        {
+                            let notice = format!("\r\n{line}\r\n");
+                            let _ = on_event.send(SessionEvent::Data {
+                                bytes: notice.into_bytes(),
+                            });
+                        }
+                    }
+                    on_event
+                        .send(SessionEvent::Exit { code })
+                        .map(|_| ())
+                        .map_err(|_| ())
+                }
             })
         })();
         match started {
@@ -383,7 +426,7 @@ pub async fn write_session(app: tauri::AppHandle, id: String, data: String) -> R
         let auth = app.state::<crate::auth::AuthState>();
         crate::auth::require_access(&auth, auth.lock_enabled())
     }
-        .map_err(|err| err.to_string())?;
+    .map_err(|err| err.to_string())?;
     let bytes = data.into_bytes();
     tauri::async_runtime::spawn_blocking(move || app.state::<SessionState>().write(&id, &bytes))
         .await
@@ -404,7 +447,7 @@ pub async fn resize_session(
         let auth = app.state::<crate::auth::AuthState>();
         crate::auth::require_access(&auth, auth.lock_enabled())
     }
-        .map_err(|err| err.to_string())?;
+    .map_err(|err| err.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<SessionState>().resize(&id, cols, rows)
     })

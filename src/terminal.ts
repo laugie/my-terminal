@@ -22,7 +22,7 @@ type Phase = "connecting" | "live" | "ended" | "failed";
 
 type TabOrigin =
   | { kind: "host"; host: HostEntry }
-  | { kind: "device"; name: string };
+  | { kind: "device"; name: string; connectionName?: string };
 
 interface Session {
   key: string;
@@ -41,7 +41,7 @@ interface Session {
 }
 
 export interface TerminalHost {
-  openDevice(key: string, name: string): Promise<{ id: string }>;
+  openDevice(key: string, name: string, connectionName?: string): Promise<{ id: string }>;
   openHost(key: string, host: HostEntry): Promise<{ id: string }>;
   discard(key: string): void;
   activate(key: string | null): void;
@@ -75,8 +75,13 @@ export function mountTerminal(
   observer.observe(stack);
   window.addEventListener("keydown", onWindowKeyDown, true);
 
-  async function openDevice(key: string, name: string): Promise<{ id: string }> {
-    return openOn(ensure(key, { kind: "device", name }), false);
+  async function openDevice(
+    key: string,
+    name: string,
+    connectionName?: string,
+  ): Promise<{ id: string }> {
+    const selected = connectionName ? connectionName : undefined;
+    return openOn(ensure(key, { kind: "device", name, connectionName: selected }), false);
   }
 
   async function openHost(key: string, host: HostEntry): Promise<{ id: string }> {
@@ -496,7 +501,7 @@ function openOrigin(
   if (origin.kind === "host") {
     return openSession(sshTargetOf(origin.host), onEvent);
   }
-  return openTopologyDevice(origin.name, onEvent);
+  return openTopologyDevice(origin.name, onEvent, origin.connectionName);
 }
 
 function currentPhase(session: Session): Phase {

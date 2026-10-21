@@ -24,6 +24,7 @@
     "src/write-queue.test.ts",
     "src/startup.test.ts",
     "src/diagram.test.ts",
-    "src/tabs.test.ts"
+    "src/tabs.test.ts",
+    "src/connection-menu.test.ts"
   ]
 }

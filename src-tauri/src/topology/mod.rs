@@ -1,13 +1,19 @@
 mod args;
 mod parse;
+mod relay;
 mod validate;
 
 use std::path::Path;
 
 use tauri::Manager;
 
-pub use args::{plan_device_session, ssh_args_for, SessionPlan, TempSshConfig};
-pub use parse::{parse_topology, Device, Region, Topology};
+pub use args::{
+    plan_device_session, plan_device_session_with, ssh_args_for, SessionPlan, TempSshConfig,
+};
+pub use parse::{parse_topology, Device, Region, RelayConnection, Topology};
+pub use relay::{
+    expand_relay_template, failure_side, relay_failure_line, ssh_args_for_connection, RelayEnds,
+};
 
 use crate::hosts::{AddressPresence, TailscaleDirectory};
 
@@ -47,6 +53,8 @@ pub struct DeviceView {
     /// Jump target device name. Not sent when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jump: Option<String>,
+    /// Names of command relays. Empty when the device has only the default method.
+    pub connections: Vec<String>,
 }
 
 /// Read `topology.json` from the app config directory.
@@ -59,7 +67,7 @@ pub async fn load_topology(app: tauri::AppHandle) -> Result<TopologyView, String
         let auth = app.state::<crate::auth::AuthState>();
         crate::auth::require_access(&auth, auth.lock_enabled())
     }
-        .map_err(|err| err.to_string())?;
+    .map_err(|err| err.to_string())?;
     let dir =
         crate::config::resolve_app_config_dir(&app).map_err(|_| "无法定位配置目录".to_string())?;
     let view = tauri::async_runtime::spawn_blocking(move || load_topology_from_dir(&dir))
@@ -160,6 +168,11 @@ fn view_from_topology(
                         presence: presence_label(device, directory).to_string(),
                         r#type: device.kind.clone(),
                         jump: device.jump.clone(),
+                        connections: device
+                            .connections
+                            .iter()
+                            .map(|connection| connection.name.clone())
+                            .collect(),
                     })
                     .collect(),
             })

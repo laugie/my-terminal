@@ -6,6 +6,50 @@ pub(crate) fn validate_graph(topology: &Topology) -> Result<(), String> {
     reject_duplicate_names(topology)?;
     reject_missing_jumps(topology)?;
     reject_cycles(topology)?;
+    reject_relay_edges(topology)?;
+    Ok(())
+}
+
+/// v0.2: a relay `via` device cannot itself jump or relay.
+fn reject_relay_edges(topology: &Topology) -> Result<(), String> {
+    let by_name = index(topology);
+    for region in &topology.regions {
+        for device in &region.devices {
+            let mut names = HashSet::new();
+            for connection in &device.connections {
+                if connection.name == "默认" {
+                    return Err(format!(
+                        "区域「{}」设备「{}」：连接名「默认」是保留名",
+                        region.name, device.name
+                    ));
+                }
+                if !names.insert(connection.name.as_str()) {
+                    return Err(format!(
+                        "区域「{}」设备「{}」：连接名「{}」重复",
+                        region.name, device.name, connection.name
+                    ));
+                }
+                if connection.via == device.name {
+                    return Err(format!(
+                        "区域「{}」设备「{}」：via 不能是自己",
+                        region.name, device.name
+                    ));
+                }
+                let Some(via) = by_name.get(connection.via.as_str()) else {
+                    return Err(format!(
+                        "区域「{}」设备「{}」：via 指向不存在的设备「{}」",
+                        region.name, device.name, connection.via
+                    ));
+                };
+                if via.jump.is_some() || !via.connections.is_empty() {
+                    return Err(format!(
+                        "区域「{}」设备「{}」：中转跳板机不能再有 jump",
+                        region.name, device.name
+                    ));
+                }
+            }
+        }
+    }
     Ok(())
 }
 

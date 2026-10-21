@@ -33,7 +33,14 @@
           "user": "me",
           "identityFile": "~/.ssh/id_app",
           "jump": "跳板机",
-          "type": "server"
+          "type": "server",
+          "connections": [
+            {
+              "name": "经跳板命令",
+              "via": "跳板机",
+              "command": "tailscale nc %h %p"
+            }
+          ]
         },
         {
           "name": "二级内网",

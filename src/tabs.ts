@@ -1,5 +1,7 @@
 // 标签状态机。不碰 DOM，会话的打开和关闭由调用方注入。
 
+import { deviceTabTitle } from "./connection-menu.js";
+
 export type TabStatus = "connecting" | "connected" | "ended" | "failed";
 
 export type TabKind = "home" | "session";
@@ -10,6 +12,8 @@ export interface TabModel {
   key: string;
   kind: TabKind;
   deviceName?: string;
+  /** Set when this tab is a command relay. Absent for the default method. */
+  connectionName?: string;
   hostId?: string;
   track?: TabTrack;
   sessionId?: string;
@@ -19,7 +23,7 @@ export interface TabModel {
 }
 
 export interface TabStripDeps {
-  openSession(name: string): Promise<{ id: string }>;
+  openSession(name: string, connectionName?: string): Promise<{ id: string }>;
   closeSession(id: string): Promise<void>;
   limit?: number;
   onChange?(): void;
@@ -41,7 +45,12 @@ export interface ShortcutKey {
 const HOME_KEY = "home";
 const HOME_TITLE = "拓扑";
 
+export const TAB_LIMIT_MESSAGE = "最多 8 个标签";
+
 export function sessionLimitMessage(limit: number): string {
+  if (limit === 8) {
+    return TAB_LIMIT_MESSAGE;
+  }
   return `最多 ${limit} 个标签`;
 }
 
@@ -127,8 +136,12 @@ export class TabStrip {
     return this.tabs.filter((tab) => tab.kind === "session").length;
   }
 
-  async openDevice(name: string): Promise<string> {
-    return this.begin(name, () => this.deps.openSession(name), { track: "device" });
+  async openDevice(name: string, connectionName?: string): Promise<string> {
+    const selected = connectionName ? connectionName : undefined;
+    return this.begin(name, () => this.deps.openSession(name, selected), {
+      track: "device",
+      connectionName: selected,
+    });
   }
 
   async openHost(
@@ -227,7 +240,7 @@ export class TabStrip {
   private async begin(
     label: string,
     open: () => Promise<{ id: string }>,
-    fields: { track: TabTrack; hostId?: string },
+    fields: { track: TabTrack; hostId?: string; connectionName?: string },
   ): Promise<string> {
     if (!this.canOpen()) {
       throw new Error(sessionLimitMessage(this.maxSessions()));
@@ -237,8 +250,9 @@ export class TabStrip {
       key,
       kind: "session",
       deviceName: label,
+      connectionName: fields.connectionName,
       status: "connecting",
-      title: label,
+      title: deviceTabTitle(label, fields.connectionName),
       track: fields.track,
       hostId: fields.hostId,
     };
@@ -289,7 +303,7 @@ export class TabStrip {
         tab.title = HOME_TITLE;
         continue;
       }
-      const name = tab.deviceName ?? "";
+      const name = deviceTabTitle(tab.deviceName ?? "", tab.connectionName);
       const count = (seen.get(name) ?? 0) + 1;
       seen.set(name, count);
       tab.title = count === 1 ? name : `${name} (${count})`;

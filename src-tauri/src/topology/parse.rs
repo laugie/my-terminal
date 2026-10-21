@@ -27,6 +27,16 @@ pub struct Device {
     pub tailscale_address: Option<String>,
     /// JSON `type`. Any string is kept. Missing and non-string values are None.
     pub kind: Option<String>,
+    /// Extra relays. Empty when the file has no `connections` array.
+    pub connections: Vec<RelayConnection>,
+}
+
+/// One command relay through another device. `name` is unique on that device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayConnection {
+    pub name: String,
+    pub via: String,
+    pub command: String,
 }
 
 const FILE_LABEL: &str = "topology.json";
@@ -122,6 +132,7 @@ fn parse_device(value: &Value, region: &str) -> Result<Device, String> {
             "mobile",
             "tailscaleAddress",
             "identityFile",
+            "connections",
         ],
         &format!("区域「{region}」."),
     );
@@ -139,6 +150,7 @@ fn parse_device(value: &Value, region: &str) -> Result<Device, String> {
     let tailscale_address = optional_string(object, "tailscaleAddress")?;
     let identity_file = optional_string(object, "identityFile")?;
     let kind = parse_kind(object.get("type"));
+    let connections = parse_connections(object.get("connections"), region, &name)?;
     Ok(Device {
         name,
         host,
@@ -149,7 +161,51 @@ fn parse_device(value: &Value, region: &str) -> Result<Device, String> {
         mobile,
         tailscale_address,
         kind,
+        connections,
     })
+}
+
+fn parse_connections(
+    value: Option<&Value>,
+    region: &str,
+    device: &str,
+) -> Result<Vec<RelayConnection>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let items = value.as_array().ok_or_else(|| {
+        format!("{FILE_LABEL}:1:1 区域「{region}」设备「{device}」：字段 connections 类型无效")
+    })?;
+    let mut parsed = Vec::with_capacity(items.len());
+    for item in items {
+        parsed.push(parse_connection(item, region, device)?);
+    }
+    Ok(parsed)
+}
+
+fn parse_connection(value: &Value, region: &str, device: &str) -> Result<RelayConnection, String> {
+    let object = value.as_object().ok_or_else(|| {
+        format!("{FILE_LABEL}:1:1 区域「{region}」设备「{device}」：连接必须是对象")
+    })?;
+    warn_unknown(
+        object,
+        &["name", "via", "command"],
+        &format!("区域「{region}」设备「{device}」.connections."),
+    );
+    let name = require_string(object, "name").map_err(|err| place(region, device, err))?;
+    reject_control(&name, "连接名")?;
+    let via = require_string(object, "via").map_err(|err| place(region, device, err))?;
+    reject_control(&via, "via")?;
+    let command = require_string(object, "command").map_err(|err| place(region, device, err))?;
+    super::relay::reject_relay_template(&command).map_err(|err| place(region, device, err))?;
+    Ok(RelayConnection { name, via, command })
+}
+
+fn place(region: &str, device: &str, err: String) -> String {
+    format!("区域「{region}」设备「{device}」：{err}")
 }
 
 /// Keep every string, including the empty string and unknown names.

@@ -48,6 +48,8 @@ pub(crate) fn check_device_tokens(device: &Device) -> Result<(), String> {
 pub struct SessionPlan {
     pub args: Vec<String>,
     pub temp_file: Option<TempSshConfig>,
+    /// Set only for a command relay. Direct and ProxyJump plans leave this empty.
+    pub(crate) relay: Option<super::relay::RelayEnds>,
 }
 
 /// One `0600` ssh config. Dropping an armed value deletes the file.
@@ -75,6 +77,15 @@ impl Drop for TempSshConfig {
 }
 
 pub fn plan_device_session(dir: &Path, device_name: &str) -> Result<SessionPlan, String> {
+    plan_device_session_with(dir, device_name, None)
+}
+
+/// `connection_name` selects a command relay. `None` keeps the direct / ProxyJump plan.
+pub fn plan_device_session_with(
+    dir: &Path,
+    device_name: &str,
+    connection_name: Option<&str>,
+) -> Result<SessionPlan, String> {
     let path = dir.join("topology.json");
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -90,6 +101,14 @@ pub fn plan_device_session(dir: &Path, device_name: &str) -> Result<SessionPlan,
         return Err("拓扑配置过大".to_string());
     }
     let topology = super::parse_topology(&text)?;
+    if let Some(name) = connection_name.filter(|name| !name.is_empty()) {
+        let (args, relay) = super::relay::prepare_relay(&topology, device_name, name)?;
+        return Ok(SessionPlan {
+            args,
+            temp_file: None,
+            relay: Some(relay),
+        });
+    }
     let args = ssh_args_for(&topology, device_name)?;
     let device =
         find(&topology, device_name).ok_or_else(|| format!("没有名为「{device_name}」的设备"))?;
@@ -98,6 +117,7 @@ pub fn plan_device_session(dir: &Path, device_name: &str) -> Result<SessionPlan,
         return Ok(SessionPlan {
             args,
             temp_file: None,
+            relay: None,
         });
     }
     let temp_file = write_temp_config(&chain)?;
@@ -117,6 +137,7 @@ pub fn plan_device_session(dir: &Path, device_name: &str) -> Result<SessionPlan,
     Ok(SessionPlan {
         args: with_file,
         temp_file: Some(temp_file),
+        relay: None,
     })
 }
 
