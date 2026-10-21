@@ -154,7 +154,7 @@ fn build_relay(
     if via.jump.is_some() || !via.connections.is_empty() {
         return Err("中转跳板机不能再有 jump".to_string());
     }
-    if !shell_insert_ok(&via.user) || !shell_insert_ok(&via.host) {
+    if !shell_name_ok(&via.user) || !shell_name_ok(&via.host) {
         return Err("跳板机参数不能用于中转命令".to_string());
     }
     let expanded = expand_relay_template(&connection.command, &device.host, device.port)?;
@@ -265,17 +265,23 @@ fn shell_safe_host(host: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
 }
 
-/// Characters that may be inserted into the shell command outside the template.
-/// `~` and `\` stay so key paths and Windows program paths keep working.
+/// Jump user and host inserted into `ProxyCommand`. `~` and `\` are refused.
+fn shell_name_ok(value: &str) -> bool {
+    shell_chars_ok(value, false)
+}
+
+/// Key path inserted into `ProxyCommand`. `~` and `\` are allowed only here.
 fn shell_insert_ok(value: &str) -> bool {
+    shell_chars_ok(value, true)
+}
+
+fn shell_chars_ok(value: &str, allow_path_marks: bool) -> bool {
     !value.is_empty()
         && !value.starts_with('-')
         && value.chars().all(|ch| {
             ch.is_ascii_alphanumeric()
-                || matches!(
-                    ch,
-                    '.' | '_' | '/' | ':' | '=' | '@' | '+' | '-' | '~' | '\\'
-                )
+                || matches!(ch, '.' | '_' | '/' | ':' | '=' | '@' | '+' | '-')
+                || (allow_path_marks && matches!(ch, '~' | '\\'))
         })
 }
 
