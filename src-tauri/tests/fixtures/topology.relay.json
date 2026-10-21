@@ -1,0 +1,11 @@
+{
+  "regions": [
+    {"name": "示例云", "devices": [
+      {"name": "跳板机", "host": "jump.example.com", "port": 2222, "user": "me", "identityFile": "~/.ssh/id_example"},
+      {"name": "二级内网", "host": "192.0.2.30", "port": 2200, "user": "ops", "jump": "跳板机",
+       "connections": [{"name": "经跳板命令", "via": "跳板机", "command": "tailscale nc %h %p"}]},
+      {"name": "内网路由", "host": "192.0.2.31", "user": "admin",
+       "connections": [{"name": "nc 中转", "via": "跳板机", "command": "nc %h %p"}]}
+    ]}
+  ]
+}
