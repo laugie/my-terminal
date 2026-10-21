@@ -38,6 +38,7 @@ try {
     path.join(outDir, "startup.test.js"),
     path.join(outDir, "diagram.test.js"),
     path.join(outDir, "tabs.test.js"),
+    path.join(outDir, "connection-menu.test.js"),
   ]);
 } finally {
   await rm(outDir, { recursive: true, force: true });
