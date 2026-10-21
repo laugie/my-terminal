@@ -41,6 +41,12 @@ pub struct DeviceView {
     pub mobile: bool,
     /// `online`, `offline`, `unknown`, or `none`.
     pub presence: String,
+    /// Config `type` when it was a string. Not sent when absent.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
+    /// Jump target device name. Not sent when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jump: Option<String>,
 }
 
 /// Read `topology.json` from the app config directory.
@@ -149,6 +155,8 @@ fn view_from_topology(
                         user: device.user.clone(),
                         mobile: device.mobile,
                         presence: presence_label(device, directory).to_string(),
+                        r#type: device.kind.clone(),
+                        jump: device.jump.clone(),
                     })
                     .collect(),
             })

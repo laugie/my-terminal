@@ -1,0 +1,18 @@
+{
+  "regions": [
+    {"name": "示例办公室", "devices": [
+      {"name": "office-router", "host": "192.0.2.1", "user": "admin"},
+      {"name": "示例NAS", "host": "192.0.2.5", "user": "admin", "type": "nas"},
+      {"name": "my-macbook", "host": "192.0.2.20", "user": "me", "mobile": true},
+      {"name": "win-desktop", "host": "192.0.2.21", "user": "me"},
+      {"name": "打印机", "host": "192.0.2.30", "user": "me", "type": "toaster"}
+    ]},
+    {"name": "示例云", "devices": [
+      {"name": "bastion", "host": "jump.example.com", "port": 2222, "user": "me", "type": "cloud"},
+      {"name": "app-server", "host": "app.example.com", "user": "me", "jump": "bastion"}
+    ]},
+    {"name": "示例家庭", "devices": [
+      {"name": "home-box", "host": "192.0.2.40", "user": "me", "jump": "bastion", "type": "server"}
+    ]}
+  ]
+}

@@ -10,6 +10,10 @@ export interface TopologyDevice {
   user: string;
   mobile: boolean;
   presence: Presence;
+  /** Config `type` when it was a string. Omitted when the file has no type. */
+  type?: string;
+  /** Jump target device name. Omitted when the device has no jump. */
+  jump?: string;
 }
 
 export interface TopologyRegion {

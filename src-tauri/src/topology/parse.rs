@@ -25,6 +25,8 @@ pub struct Device {
     pub jump: Option<String>,
     pub mobile: bool,
     pub tailscale_address: Option<String>,
+    /// JSON `type`. Any string is kept. Missing and non-string values are None.
+    pub kind: Option<String>,
 }
 
 const FILE_LABEL: &str = "topology.json";
@@ -115,6 +117,7 @@ fn parse_device(value: &Value, region: &str) -> Result<Device, String> {
             "host",
             "port",
             "user",
+            "type",
             "jump",
             "mobile",
             "tailscaleAddress",
@@ -135,6 +138,7 @@ fn parse_device(value: &Value, region: &str) -> Result<Device, String> {
         .map_err(|err| format!("区域「{region}」设备「{name}」：{err}"))?;
     let tailscale_address = optional_string(object, "tailscaleAddress")?;
     let identity_file = optional_string(object, "identityFile")?;
+    let kind = parse_kind(object.get("type"));
     Ok(Device {
         name,
         host,
@@ -144,7 +148,17 @@ fn parse_device(value: &Value, region: &str) -> Result<Device, String> {
         jump,
         mobile,
         tailscale_address,
+        kind,
     })
+}
+
+/// Keep every string, including the empty string and unknown names.
+/// Numbers, objects, and other non-strings are ignored.
+fn parse_kind(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(text)) => Some(text.clone()),
+        _ => None,
+    }
 }
 
 fn require_string(object: &Map<String, Value>, field: &str) -> Result<String, String> {

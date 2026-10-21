@@ -458,3 +458,86 @@ body {
     justify-content: flex-start;
   }
 }
+
+.diagram-scroll {
+  overflow-x: auto;
+  margin: 0 0 8px;
+}
+
+.diagram {
+  display: block;
+  max-width: none;
+  height: auto;
+  color: #d7d7d7;
+}
+
+.diagram .region-frame {
+  fill: #252526;
+  fill-opacity: 0.78;
+  stroke: #3c3c3c;
+}
+
+.diagram .diagram-region-title,
+.diagram .diagram-name {
+  fill: #e6e6e6;
+}
+
+.diagram .diagram-address {
+  fill: #9a9a9a;
+}
+
+.diagram .device {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  gap: 0;
+  cursor: pointer;
+}
+
+.diagram .diagram-node-hit {
+  fill: transparent;
+  stroke: transparent;
+}
+
+.diagram .device:focus {
+  outline: none;
+}
+
+.diagram .device:hover .diagram-node-hit,
+.diagram .device:focus-visible .diagram-node-hit {
+  stroke: #4c6f8a;
+}
+
+.diagram .device-active .diagram-node-hit {
+  stroke: #2f7a5a;
+  fill: rgba(47, 122, 90, 0.2);
+}
+
+.diagram .device-open-disabled {
+  cursor: default;
+}
+
+.diagram .jump-edge {
+  fill: none;
+  stroke: #8eb4d4;
+}
+
+.diagram .jump-edge.cross-region {
+  stroke-dasharray: 6 4;
+}
+
+.diagram .diagram-presence-online {
+  fill: #3dd68c;
+}
+
+.diagram .diagram-presence-offline {
+  fill: #8a8a8a;
+}
+
+.diagram .diagram-presence-unknown {
+  fill: none;
+  stroke: #e6c98a;
+}
