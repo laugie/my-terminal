@@ -111,6 +111,14 @@ test("shortcuts: mac uses Cmd, Windows uses Ctrl; 9 = last", () => {
   assert.equal(shortcutAction(k("0", { metaKey: true }), "mac"), null);
 });
 
+test("windows Ctrl+F4 closes; bare Ctrl+W and composing do not", () => {
+  const k = (key: string, m: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; isComposing: boolean }>) =>
+    ({ key, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false, ...m });
+  assert.deepEqual(shortcutAction(k("F4", { ctrlKey: true }), "windows"), { type: "close" });
+  assert.equal(shortcutAction(k("w", { ctrlKey: true }), "windows"), null);
+  assert.equal(shortcutAction(k("w", { metaKey: true, isComposing: true }), "mac"), null);
+});
+
 test("Cmd/Ctrl+W on home does nothing; jump beyond count is ignored", async () => {
   const { s, closed } = strip();
   await s.openDevice("a");

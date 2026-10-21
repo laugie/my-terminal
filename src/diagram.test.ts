@@ -81,6 +81,7 @@ test("svg escapes names", () => {
   const v = { ...VIEW, regions: [{ name: "<r>", devices: [dev('a"<b>&')] }] } as unknown as TopologyView;
   const svg = renderDiagramSvg(buildDiagram(v));
   assert.ok(!svg.includes("<b>") && svg.includes("&lt;b&gt;") && svg.includes("&amp;"));
+  assert.ok(svg.includes("&quot;"), "设备名里的双引号要转义");
 });
 
 test("click, Enter and Space activate the same connect call as #16", () => {

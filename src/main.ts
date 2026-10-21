@@ -7,8 +7,11 @@ import {
   type ListHostsResponse,
 } from "./hosts.ts";
 import { loadTopology, type TopologyView } from "./topology.ts";
-import { renderTopology } from "./topology-view.ts";
-import { TAB_LIMIT_MESSAGE, mountTerminal } from "./terminal.ts";
+import { renderTopology, syncDeviceOpenState } from "./topology-view.ts";
+import { mountTerminal, type TerminalHost } from "./terminal.ts";
+import { mountTabBar, type TabBar } from "./tab-bar.ts";
+import { closeSession } from "./session.ts";
+import { sessionLimitMessage, TabStrip, type ShortcutAction } from "./tabs.ts";
 import { mountLogin } from "./login.ts";
 
 const app = document.querySelector("#app");
@@ -66,22 +69,80 @@ formSection.append(formTitle, form, formError);
 manualRoot.append(list, formSection);
 
 const terminalPanel = el("section", "terminal-panel");
+terminalPanel.hidden = true;
 const shell = el("div", "shell");
 shell.hidden = true;
 shell.append(header, statusBar, topologyRoot, manualRoot, terminalPanel);
 app.append(shell);
 
-const terminal = mountTerminal(
-  terminalPanel,
-  () => {
+const tabBar: TabBar = mountTabBar(shell, {
+  onActivate: (key) => {
+    present(key);
+  },
+  onClose: (key) => {
+    requestClose(key);
+  },
+  onNew: () => {
+    focusHome();
+  },
+  onReconnect: () => {
+    void reconnectActive();
+  },
+});
+
+const host: { terminal: TerminalHost | null } = { terminal: null };
+const strip: TabStrip = new TabStrip({
+  openSession(name: string): Promise<{ id: string }> {
+    const opener = host.terminal;
+    if (!opener) {
+      throw new Error("无法打开标签");
+    }
+    const tab = [...strip.tabs].reverse().find(
+      (item) =>
+        item.track === "device" &&
+        item.deviceName === name &&
+        item.sessionId === undefined &&
+        item.status === "connecting",
+    );
+    if (!tab) {
+      throw new Error("无法打开标签");
+    }
+    return opener.openDevice(tab.key, name);
+  },
+  closeSession: (id) => closeSession(id),
+  limit: 8,
+  onChange: () => {
+    tabBar.render(strip);
     markActive();
   },
-  () => {
-    const target = page === "topology" ? topologyRoot : list;
-    target.tabIndex = -1;
-    target.focus();
+});
+
+const terminal = mountTerminal(terminalPanel, {
+  onChange: () => {
+    tabBar.render(strip);
+    markActive();
   },
-);
+  onConnected: (key, id) => {
+    strip.onConnected(key, id);
+  },
+  onExit: (key, code) => {
+    strip.onExit(key, code);
+  },
+  onFailed: (key, message) => {
+    strip.onFailed(key, message);
+  },
+  onShortcut: (action) => {
+    applyShortcut(action);
+  },
+  onNew: () => {
+    focusHome();
+  },
+  onCycle: (step) => {
+    cycleTab(step);
+  },
+});
+host.terminal = terminal;
+tabBar.render(strip);
 
 let page: Page = "topology";
 let signedIn = false;
@@ -122,14 +183,152 @@ mountLogin(app, () => {
 
 function showPage(next: Page): void {
   page = next;
-  topologyRoot.hidden = next !== "topology";
-  manualRoot.hidden = next !== "manual";
-  statusBar.hidden = next !== "manual";
-  topologyButton.classList.toggle("active", next === "topology");
-  manualButton.classList.toggle("active", next === "manual");
-  topologyButton.setAttribute("aria-current", next === "topology" ? "page" : "false");
-  manualButton.setAttribute("aria-current", next === "manual" ? "page" : "false");
+  syncNav();
+  const home = strip.tabs[0];
+  if (home) {
+    present(home.key);
+  }
+}
+
+function syncNav(): void {
+  topologyButton.classList.toggle("active", page === "topology");
+  manualButton.classList.toggle("active", page === "manual");
+  topologyButton.setAttribute("aria-current", page === "topology" ? "page" : "false");
+  manualButton.setAttribute("aria-current", page === "manual" ? "page" : "false");
   syncRefreshButton();
+}
+
+function focusHome(): void {
+  page = "topology";
+  syncNav();
+  const home = strip.tabs[0];
+  if (home) {
+    present(home.key);
+  }
+  topologyRoot.focus();
+}
+
+function viewingHome(): boolean {
+  const tab = strip.tabs.find((item) => item.key === strip.activeKey);
+  return !tab || tab.kind === "home";
+}
+
+function present(key: string): void {
+  strip.activate(key);
+  const onHome = viewingHome();
+  terminalPanel.hidden = onHome;
+  if (onHome) {
+    terminal.activate(null);
+    topologyRoot.hidden = page !== "topology";
+    manualRoot.hidden = page !== "manual";
+    statusBar.hidden = page !== "manual";
+  } else {
+    topologyRoot.hidden = true;
+    manualRoot.hidden = true;
+    statusBar.hidden = true;
+    terminal.activate(key);
+  }
+  tabBar.render(strip);
+  markActive();
+  syncRefreshButton();
+}
+
+function applyShortcut(action: ShortcutAction): void {
+  if (action.type === "close") {
+    requestClose(strip.activeKey);
+    return;
+  }
+  strip.jump(action.index);
+  present(strip.activeKey);
+}
+
+function cycleTab(step: number): void {
+  const tabs = strip.tabs;
+  const index = Math.max(0, tabs.findIndex((tab) => tab.key === strip.activeKey));
+  const next = tabs[(index + step + tabs.length) % tabs.length];
+  if (next) {
+    present(next.key);
+  }
+}
+
+function requestClose(key: string): void {
+  const tab = strip.tabs.find((item) => item.key === key);
+  if (!tab || tab.kind !== "session") {
+    return;
+  }
+  if (
+    (tab.status === "connecting" || tab.status === "connected") &&
+    !window.confirm("结束该会话？")
+  ) {
+    return;
+  }
+  terminal.discard(key);
+  strip.close(key);
+  present(strip.activeKey);
+}
+
+async function connectDevice(name: string): Promise<void> {
+  if (!strip.canOpen()) {
+    tabBar.setAlert(sessionLimitMessage(strip.maxSessions()));
+    markActive();
+    return;
+  }
+  tabBar.setAlert("");
+  terminalPanel.hidden = false;
+  try {
+    const pending = strip.openDevice(name);
+    present(strip.activeKey);
+    await pending;
+    present(strip.activeKey);
+  } catch (err) {
+    tabBar.setAlert(errorText(err));
+    present(strip.activeKey);
+  }
+}
+
+async function connectHost(host: HostEntry): Promise<void> {
+  if (!strip.canOpen()) {
+    tabBar.setAlert(sessionLimitMessage(strip.maxSessions()));
+    markActive();
+    return;
+  }
+  tabBar.setAlert("");
+  terminalPanel.hidden = false;
+  try {
+    const pending = strip.openHost(host.name, host.id, () => {
+      const tab = [...strip.tabs].reverse().find(
+        (item) =>
+          item.track === "host" &&
+          item.hostId === host.id &&
+          item.sessionId === undefined &&
+          item.status === "connecting",
+      );
+      if (!tab) {
+        throw new Error("无法打开标签");
+      }
+      return terminal.openHost(tab.key, host);
+    });
+    present(strip.activeKey);
+    await pending;
+    present(strip.activeKey);
+  } catch (err) {
+    tabBar.setAlert(errorText(err));
+    present(strip.activeKey);
+  }
+}
+
+async function reconnectActive(): Promise<void> {
+  const tab = strip.tabs.find((item) => item.key === strip.activeKey);
+  if (!tab || !strip.prepareReconnect(tab.key)) {
+    return;
+  }
+  tabBar.setAlert("");
+  try {
+    await terminal.reconnect(tab.key);
+  } catch (err) {
+    tabBar.setAlert(errorText(err));
+  }
+  tabBar.render(strip);
 }
 
 function syncRefreshButton(): void {
@@ -173,12 +372,13 @@ function paintTopology(): void {
   if (!topologyView) {
     return;
   }
+  const active = strip.tabs.find((item) => item.key === strip.activeKey);
   renderTopology(topologyRoot, topologyView, {
     onConnect: (name) => {
-      void terminal.connectDevice(name);
+      void connectDevice(name);
     },
-    activeName: terminal.activeDeviceName(),
-    canOpen: terminal.canOpenTab(),
+    activeName: active?.track === "device" ? active.deviceName ?? null : null,
+    canOpen: strip.canOpen(),
   });
 }
 
@@ -284,37 +484,45 @@ function render(result: ListHostsResponse): void {
 }
 
 function markActive(): void {
-  const activeId = terminal.activeHostId();
-  const canOpen = terminal.canOpenTab();
+  const active = strip.tabs.find((item) => item.key === strip.activeKey);
+  const activeId = active?.track === "host" ? active.hostId ?? null : null;
+  const activeName = active?.track === "device" ? active.deviceName ?? null : null;
+  const canOpen = strip.canOpen();
+  const limit = sessionLimitMessage(strip.maxSessions());
   for (const item of list.querySelectorAll<HTMLLIElement>(".host")) {
     item.classList.toggle("host-active", item.dataset.hostId === activeId);
     item.classList.toggle("host-open-disabled", !canOpen);
-    item.title = canOpen ? "" : TAB_LIMIT_MESSAGE;
+    item.title = canOpen ? "" : limit;
+    if (canOpen) {
+      item.removeAttribute("aria-disabled");
+    } else {
+      item.setAttribute("aria-disabled", "true");
+    }
   }
-  const activeName = terminal.activeDeviceName();
-  for (const item of topologyRoot.querySelectorAll<HTMLLIElement>(".device")) {
+  for (const item of topologyRoot.querySelectorAll<SVGElement>(".device")) {
     item.classList.toggle("device-active", item.dataset.deviceName === activeName);
-    item.classList.toggle("device-open-disabled", !canOpen);
-    item.title = canOpen ? "" : TAB_LIMIT_MESSAGE;
   }
+  syncDeviceOpenState(topologyRoot, canOpen);
 }
 
 function renderHost(host: HostEntry): HTMLLIElement {
   const item = el("li", "host");
   item.dataset.hostId = host.id;
-  if (host.id === terminal.activeHostId()) {
+  const active = strip.tabs.find((item) => item.key === strip.activeKey);
+  if (active?.track === "host" && host.id === active.hostId) {
     item.classList.add("host-active");
   }
-  if (!terminal.canOpenTab()) {
+  if (!strip.canOpen()) {
     item.classList.add("host-open-disabled");
-    item.title = TAB_LIMIT_MESSAGE;
+    item.title = sessionLimitMessage(strip.maxSessions());
+    item.setAttribute("aria-disabled", "true");
   }
   item.addEventListener("click", (event) => {
     const target = event.target;
     if (target instanceof HTMLElement && target.closest("[data-action='remove']")) {
       return;
     }
-    void terminal.connect(host);
+    void connectHost(host);
   });
   const main = el("div", "host-main");
   const dot = el("span", host.online === true ? "dot online" : "dot offline");
