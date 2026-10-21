@@ -170,6 +170,152 @@ export function mountLogin(parent: HTMLElement, onUnlocked: () => void): void {
   }
 }
 
+export type CredentialMode = "setup" | "verify";
+
+/**
+ * Username plus a masked secret, used when the lock switch needs setup or a check.
+ * The secret is cleared on submit and is not written to localStorage or the console.
+ */
+export function mountCredentialPrompt(
+  parent: HTMLElement,
+  mode: CredentialMode,
+  onSubmit: (username: string, secret: string, confirm: string) => Promise<void>,
+  onCancel: () => void,
+): { close: () => void } {
+  const box = document.createElement("div");
+  box.className = "settings-prompt";
+
+  const heading = document.createElement("h3");
+  heading.className = "section-title";
+  heading.textContent = mode === "setup" ? "设置用户名和口令" : "验证当前口令";
+
+  const form = document.createElement("form");
+  form.className = "form login-form";
+  const usernameInput = labeledInput(form, "用户名", "username", false);
+  const secretInput = labeledInput(form, "口令", "current-secret", true);
+  const confirmInput = labeledInput(form, "再输入一次口令", "new-secret", true);
+  const setup = mode === "setup";
+  confirmInput.parentElement?.toggleAttribute("hidden", !setup);
+  confirmInput.required = setup;
+  usernameInput.required = true;
+  secretInput.required = true;
+
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.className = "button primary";
+  submit.textContent = setup ? "完成设置" : "确认关闭";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "button";
+  cancel.textContent = "取消";
+  const actions = document.createElement("div");
+  actions.className = "settings-actions";
+  actions.append(submit, cancel);
+  form.append(actions);
+
+  const error = document.createElement("p");
+  error.className = "form-error";
+  error.setAttribute("role", "alert");
+
+  const countdown = document.createElement("p");
+  countdown.className = "login-hint";
+  countdown.setAttribute("role", "status");
+  countdown.setAttribute("aria-live", "polite");
+
+  box.append(heading, form, error, countdown);
+  parent.append(box);
+
+  let timer = 0;
+  let throttled = false;
+  let closed = false;
+
+  cancel.addEventListener("click", () => {
+    close();
+    onCancel();
+  });
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (throttled || submit.disabled) {
+      return;
+    }
+    const username = usernameInput.value;
+    const secret = secretInput.value;
+    const confirm = confirmInput.value;
+    secretInput.value = "";
+    confirmInput.value = "";
+    void send(username, secret, confirm);
+  });
+
+  return { close };
+
+  function close(): void {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    window.clearTimeout(timer);
+    secretInput.value = "";
+    confirmInput.value = "";
+    box.remove();
+  }
+
+  async function send(username: string, secret: string, confirm: string): Promise<void> {
+    error.textContent = "";
+    submit.disabled = true;
+    try {
+      await onSubmit(username, secret, confirm);
+    } catch (err) {
+      error.textContent = errorText(err);
+      try {
+        const snapshot = await authStatus();
+        armThrottle(snapshot.retryAfterMs);
+      } catch {
+        if (error.textContent === "") {
+          error.textContent = "无法读取系统凭据库";
+        }
+      }
+    } finally {
+      secretInput.value = "";
+      confirmInput.value = "";
+      if (!closed && !throttled) {
+        submit.disabled = false;
+      }
+    }
+  }
+
+  function armThrottle(retryAfterMs: number): void {
+    window.clearTimeout(timer);
+    timer = 0;
+    if (retryAfterMs <= 0) {
+      throttled = false;
+      countdown.textContent = "";
+      if (!closed) {
+        submit.disabled = false;
+      }
+      return;
+    }
+    throttled = true;
+    submit.disabled = true;
+    const endsAt = Date.now() + retryAfterMs;
+    const tick = (): void => {
+      const left = endsAt - Date.now();
+      if (left <= 0) {
+        throttled = false;
+        countdown.textContent = "";
+        if (!closed) {
+          submit.disabled = false;
+        }
+        timer = 0;
+        return;
+      }
+      countdown.textContent = `请等待 ${Math.ceil(left / 1000)} 秒`;
+      timer = window.setTimeout(tick, 200);
+    };
+    tick();
+  }
+}
+
 function labeledInput(
   form: HTMLFormElement,
   labelText: string,

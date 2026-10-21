@@ -25,9 +25,10 @@ done
 # src-tauri/src/auth/hash.rs: argon2 的 password_hash API（PasswordHash、hash_password、verify_password）就叫这个词。
 # src-tauri/src/auth/store.rs: keyring 的 get_password / set_password 就叫这个词。
 # src/login.ts: HTML 口令框的 type 必须是 password。
+# src/startup.ts、src/startup.test.ts: 登录锁开关逻辑，只涉及是否已设口令的布尔状态。
 password_allowed() {
   case "$1" in
-    src-tauri/src/auth/hash.rs|src-tauri/src/auth/store.rs|src/login.ts) return 0 ;;
+    src-tauri/src/auth/hash.rs|src-tauri/src/auth/store.rs|src/login.ts|src/startup.ts|src/startup.test.ts) return 0 ;;
     *) return 1 ;;
   esac
 }

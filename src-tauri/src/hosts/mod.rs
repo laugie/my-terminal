@@ -147,6 +147,14 @@ impl HostState {
         }
     }
 
+    pub fn login_lock_view(&self) -> Result<crate::config::LoginLockView, String> {
+        self.with_store(|store| store.login_lock_view())
+    }
+
+    pub fn set_login_lock_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.with_store(|store| store.set_login_lock_enabled(enabled))?
+    }
+
     fn with_store<T>(&self, f: impl FnOnce(&mut JsonHostStore) -> T) -> Result<T, String> {
         let mut guard = self
             .store
@@ -165,7 +173,10 @@ pub async fn list_hosts(
     app: tauri::AppHandle,
     state: tauri::State<'_, HostState>,
 ) -> Result<ListHostsResponse, String> {
-    crate::auth::require_unlocked(&app.state::<crate::auth::AuthState>())
+    {
+        let auth = app.state::<crate::auth::AuthState>();
+        crate::auth::require_access(&auth, auth.lock_enabled())
+    }
         .map_err(|err| err.to_string())?;
     let (manuals, notice) = state.with_store(|store| {
         let notice = store.notice().map(ToOwned::to_owned);
@@ -191,7 +202,10 @@ pub async fn add_manual_host(
     user: Option<String>,
     port: Option<u32>,
 ) -> Result<ManualHost, String> {
-    crate::auth::require_unlocked(&app.state::<crate::auth::AuthState>())
+    {
+        let auth = app.state::<crate::auth::AuthState>();
+        crate::auth::require_access(&auth, auth.lock_enabled())
+    }
         .map_err(|err| err.to_string())?;
     let validated = validate_manual_input(&name, &host, user.as_deref(), port)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -208,7 +222,10 @@ pub async fn add_manual_host(
 /// 写盘放在 `spawn_blocking` 里；锁只在该闭包内持有，不跨 `.await`。
 #[tauri::command]
 pub async fn remove_manual_host(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    crate::auth::require_unlocked(&app.state::<crate::auth::AuthState>())
+    {
+        let auth = app.state::<crate::auth::AuthState>();
+        crate::auth::require_access(&auth, auth.lock_enabled())
+    }
         .map_err(|err| err.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<HostState>();
