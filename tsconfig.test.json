@@ -22,6 +22,7 @@
     "src/write-queue.ts",
     "src/write-chunks.test.ts",
     "src/write-queue.test.ts",
-    "src/startup.test.ts"
+    "src/startup.test.ts",
+    "src/diagram.test.ts"
   ]
 }

@@ -4,13 +4,16 @@
       "name": "示例办公室",
       "devices": [
         {"name": "示例路由器", "host": "192.0.2.1", "user": "admin"},
+        {"name": "office-nas", "host": "192.0.2.5", "user": "admin", "type": "nas"},
         {
           "name": "示例笔记本",
           "host": "192.0.2.20",
           "user": "me",
           "mobile": true,
-          "tailscaleAddress": "192.0.2.20"
-        }
+          "tailscaleAddress": "192.0.2.20",
+          "type": "mac"
+        },
+        {"name": "win-desktop", "host": "192.0.2.21", "user": "me"}
       ]
     },
     {
@@ -21,14 +24,16 @@
           "host": "jump.example.com",
           "port": 2222,
           "user": "me",
-          "identityFile": "~/.ssh/id_example"
+          "identityFile": "~/.ssh/id_example",
+          "type": "cloud"
         },
         {
           "name": "内网服务器",
           "host": "app.example.com",
           "user": "me",
           "identityFile": "~/.ssh/id_app",
-          "jump": "跳板机"
+          "jump": "跳板机",
+          "type": "server"
         },
         {
           "name": "二级内网",
@@ -36,6 +41,18 @@
           "port": 2200,
           "user": "ops",
           "jump": "内网服务器"
+        }
+      ]
+    },
+    {
+      "name": "示例家庭",
+      "devices": [
+        {
+          "name": "home-box",
+          "host": "192.0.2.40",
+          "user": "me",
+          "jump": "跳板机",
+          "type": "server"
         }
       ]
     }

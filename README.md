@@ -23,11 +23,15 @@
 
 ## 拓扑首页
 
-首页按区域显示本机 `topology.json`。它和 `config.json` 在同一目录：
+首页是本机 `topology.json` 的网络拓扑图。它和 `config.json` 在同一目录：
 
 - macOS：`~/Library/Application Support/my-terminal/topology.json`
 - Windows：`%APPDATA%\my-terminal\topology.json`
 
 仓库里的 [topology.example.json](topology.example.json) 只含占位地址。复制到上面的路径后，点「重新加载」。文件缺失或格式不对时，首页会写出具体原因。原来的 Tailscale 列表和手动添加仍在「手动服务器」。
 
-点击一台设备时，界面只把设备名交给后端。主机、用户、端口、密钥路径和跳板都由后端按文件拼出来，再调用系统 ssh。跳板机如果写了密钥路径，会生成一份临时 ssh 配置：Unix 上权限是 `0600`；Windows 上用 `%SystemRoot%\System32\icacls.exe` 去掉继承，并尽量只留给当前用户。跳板机配置了密钥路径时会用 `-F`，此时不会读取 `/etc/ssh/ssh_config`（包括 macOS 的 `ssh_config.d`）。用户自己的 `~/.ssh/config` 通过 `Match all` 之后的 `Include ~/.ssh/config` 保留。会话结束或退出应用时删除临时文件。配了 `tailscaleAddress` 的设备会对照 Tailscale 状态显示在线、离线或「未知」；连上去用的仍是 `host`。
+每个区域一个圆角分组框，按文件顺序从左到右排，一行最多三个，超过宽度就换行。设备是内联 SVG 图标，`type` 取 `server`、`mac`、`windows`、`router`、`nas`、`cloud`，不区分大小写。不写 `type` 时按名称猜测：先转成小写，再按 `-`、`_`、`.`、空格和中英文边界切成词，整词匹配（所以 `machine` 不是 Mac，`twin` 不是 Windows）。中文关键词按包含匹配，例如名称里的「路由」。类别按路由器、NAS、Mac、Windows、云、服务器的顺序，先匹配到的为准。猜不出、空字符串或不认识的取值用通用图标，文件照常加载。猜测可能不准，写上 `type` 即可纠正。没有 `type` 的旧配置也能打开。
+
+图标下面是名称和 `host:port`，不显示用户名。跳板画成带箭头的曲线，同一区域内是实线，跨区域是虚线，多级跳板每一跳一条线。移动设备在图标右上角有标记。配了 `tailscaleAddress` 的设备仍在图标左下角用圆点表示在线、离线或未知。
+
+点击一台设备，或用 Tab 选中后按 Enter 或 Space，界面只把设备名交给后端。主机、用户、端口、密钥路径和跳板都由后端按文件拼出来，再调用系统 ssh。跳板机如果写了密钥路径，会生成一份临时 ssh 配置：Unix 上权限是 `0600`；Windows 上用 `%SystemRoot%\System32\icacls.exe` 去掉继承，并尽量只留给当前用户。跳板机配置了密钥路径时会用 `-F`，此时不会读取 `/etc/ssh/ssh_config`（包括 macOS 的 `ssh_config.d`）。用户自己的 `~/.ssh/config` 通过 `Match all` 之后的 `Include ~/.ssh/config` 保留。会话结束或退出应用时删除临时文件。配了 `tailscaleAddress` 的设备会对照 Tailscale 状态显示在线、离线或「未知」；连上去用的仍是 `host`。
