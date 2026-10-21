@@ -589,3 +589,69 @@ body {
   fill: none;
   stroke: #e6c98a;
 }
+
+.tabbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.tabbar-list {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tabbar-new,
+.tabbar-reconnect,
+.tabbar-end {
+  flex: none;
+}
+
+.tabbar-end {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.tabbar-alert {
+  margin: -4px 0 12px;
+  color: #e6c98a;
+}
+
+.tabbar-alert[hidden] {
+  display: none;
+}
+
+.tab-home {
+  padding-right: 10px;
+}
+
+.tab-status {
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  flex: none;
+}
+
+.tab-status-connecting {
+  border: 2px solid #e6c98a;
+  border-right-color: transparent;
+  background: transparent;
+}
+
+.tab-status-connected {
+  background: #3dd68c;
+}
+
+.tab-status-ended {
+  background: #8a8a8a;
+}
+
+.tab-status-failed {
+  background: #d35d5d;
+}

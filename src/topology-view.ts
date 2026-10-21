@@ -1,5 +1,8 @@
 import { bindDeviceActivation, buildDiagram, renderDiagramSvg } from "./diagram.ts";
+import { sessionLimitMessage } from "./tabs.ts";
 import type { TopologyView } from "./topology.ts";
+
+const OPEN_LIMIT_HINT = sessionLimitMessage(8);
 
 export function renderTopology(
   root: HTMLElement,
@@ -26,20 +29,47 @@ export function renderTopology(
   }
 
   const scroll = el("div", "diagram-scroll");
-  scroll.innerHTML = renderDiagramSvg(buildDiagram(view));
+  scroll.innerHTML = renderDiagramSvg(buildDiagram(view), { canOpen: actions.canOpen });
   for (const node of scroll.querySelectorAll<SVGElement>(".device")) {
     const name = node.dataset.deviceName ?? "";
     if (name === actions.activeName) {
       node.classList.add("device-active");
     }
-    if (!actions.canOpen) {
-      node.classList.add("device-open-disabled");
+    if (!actions.canOpen && !node.dataset.openTitle) {
+      const text = node.querySelector("title")?.textContent ?? "";
+      const suffix = ` ${OPEN_LIMIT_HINT}`;
+      if (text.endsWith(suffix)) {
+        node.dataset.openTitle = text.slice(0, -suffix.length);
+      }
     }
     bindDeviceActivation(node, name, (deviceName) => {
       actions.onConnect(deviceName);
     });
   }
+  syncDeviceOpenState(scroll, actions.canOpen);
   root.append(scroll);
+}
+
+export function syncDeviceOpenState(root: ParentNode, canOpen: boolean): void {
+  for (const node of root.querySelectorAll<SVGElement>(".device")) {
+    if (!node.dataset.openTitle) {
+      node.dataset.openTitle = node.querySelector("title")?.textContent ?? "";
+    }
+    const title = node.querySelector("title");
+    const base = node.dataset.openTitle ?? "";
+    node.classList.toggle("device-open-disabled", !canOpen);
+    if (canOpen) {
+      node.removeAttribute("aria-disabled");
+      if (title) {
+        title.textContent = base;
+      }
+      continue;
+    }
+    node.setAttribute("aria-disabled", "true");
+    if (title) {
+      title.textContent = base.includes(OPEN_LIMIT_HINT) ? base : `${base} ${OPEN_LIMIT_HINT}`.trim();
+    }
+  }
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(

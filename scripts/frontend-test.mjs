@@ -37,6 +37,7 @@ try {
     path.join(outDir, "write-queue.test.js"),
     path.join(outDir, "startup.test.js"),
     path.join(outDir, "diagram.test.js"),
+    path.join(outDir, "tabs.test.js"),
   ]);
 } finally {
   await rm(outDir, { recursive: true, force: true });

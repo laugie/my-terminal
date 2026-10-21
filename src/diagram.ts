@@ -28,6 +28,7 @@ const CONTAINER_W = 1040;
 const ICON = 48;
 const ICON_X = (NODE_W - ICON) / 2;
 const ICON_Y = 6;
+const OPEN_LIMIT_HINT = "最多 8 个标签";
 
 export interface DiagramGroup {
   name: string;
@@ -158,7 +159,10 @@ export function buildDiagram(view: TopologyView): DiagramModel {
   };
 }
 
-export function renderDiagramSvg(model: DiagramModel): string {
+export function renderDiagramSvg(
+  model: DiagramModel,
+  options?: { canOpen?: boolean },
+): string {
   const byName = new Map(model.nodes.map((node) => [node.name, node]));
   const edges = model.edges
     .map((edge) => {
@@ -187,7 +191,8 @@ export function renderDiagramSvg(model: DiagramModel): string {
     })
     .join("");
 
-  const nodes = model.nodes.map((node, index) => renderNode(node, index)).join("");
+  const canOpen = options?.canOpen !== false;
+  const nodes = model.nodes.map((node, index) => renderNode(node, index, canOpen)).join("");
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" class="diagram" viewBox="0 0 ${model.width} ${model.height}" width="${model.width}" height="${model.height}" role="group" font-family="ui-sans-serif, system-ui, sans-serif">` +
     `<defs>${iconSymbols()}` +
@@ -218,19 +223,21 @@ export function bindDeviceActivation(
   });
 }
 
-function renderNode(node: DiagramNode, index: number): string {
+function renderNode(node: DiagramNode, index: number, canOpen: boolean): string {
   const name = escapeXml(node.name);
   const address = `${escapeXml(node.host)}:${node.port}`;
   const label = `连接 ${name}`;
   const title = `${name} ${address}${node.mobile ? " 移动设备" : ""}`;
+  const shownTitle = canOpen ? title : `${title} ${OPEN_LIMIT_HINT}`;
+  const disabled = canOpen ? "" : ' aria-disabled="true"';
   const iconX = node.x + ICON_X;
   const iconY = node.y + ICON_Y;
   const center = node.x + NODE_W / 2;
   const presence = presenceMark(node);
   const badge = node.mobile ? mobileBadge(iconX + ICON - 8, iconY - 2) : "";
   return (
-    `<g class="device" role="button" tabindex="0" data-kind="${node.kind}" data-device-name="${name}" aria-label="${label}">` +
-    `<title>${title}</title>` +
+    `<g class="device" role="button" tabindex="0" data-kind="${node.kind}" data-device-name="${name}" aria-label="${label}"${disabled}>` +
+    `<title>${shownTitle}</title>` +
     `<rect class="diagram-node-hit" x="${node.x + 4}" y="${node.y + 2}" width="${NODE_W - 8}" height="${NODE_H - 4}" rx="8" fill="transparent" stroke="transparent" stroke-width="2"/>` +
     `<use href="#diagram-icon-${node.kind}" x="${iconX}" y="${iconY}" width="${ICON}" height="${ICON}" color="#d7d7d7"/>` +
     presence +

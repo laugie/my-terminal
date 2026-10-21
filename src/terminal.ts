@@ -10,148 +10,99 @@ import {
   writeSession,
   type SessionEvent,
 } from "./session.ts";
+import { shortcutAction, type ShortcutAction } from "./tabs.ts";
 import { openTopologyDevice } from "./topology.ts";
 import { splitWriteChunks } from "./write-chunks.ts";
 import { WriteQueue } from "./write-queue.ts";
 
-/** Ended tabs count. The backend limit only covers live processes. */
-const MAX_TABS = 8;
-
-export const TAB_LIMIT_MESSAGE = "最多 8 个标签";
-
 /** Extra time after Exit before the process is reaped, so a late chunk can land. */
 const EXIT_REAP_DELAY_MS = 300;
 
-type Phase = "connecting" | "live" | "ended";
+type Phase = "connecting" | "live" | "ended" | "failed";
 
 type TabOrigin =
   | { kind: "host"; host: HostEntry }
   | { kind: "device"; name: string };
 
-interface Tab {
+interface Session {
+  key: string;
   origin: TabOrigin;
   phase: Phase;
   sessionId: string;
   generation: number;
-  /** Each entry is one keystroke or paste, already split into write-sized chunks. */
   pendingWrites: string[][];
   queue: WriteQueue;
   error: string;
   term: Terminal;
   fit: FitAddon;
   view: HTMLElement;
-  element: HTMLElement;
-  title: HTMLElement;
-  endedMark: HTMLElement;
   reapTimer: number;
+  discarded: boolean;
 }
 
-export interface TerminalPanel {
-  connect(host: HostEntry): Promise<void>;
-  connectDevice(name: string): Promise<void>;
-  activeHostId(): string | null;
-  activeDeviceName(): string | null;
-  canOpenTab(): boolean;
+export interface TerminalHost {
+  openDevice(key: string, name: string): Promise<{ id: string }>;
+  openHost(key: string, host: HostEntry): Promise<{ id: string }>;
+  discard(key: string): void;
+  activate(key: string | null): void;
+  reconnect(key: string): Promise<void>;
 }
 
 export function mountTerminal(
   panel: HTMLElement,
-  onChange: () => void,
-  focusHostList: () => void,
-): TerminalPanel {
-  const bar = el("div", "terminal-bar");
-  const newTab = document.createElement("button");
-  newTab.type = "button";
-  newTab.className = "button";
-  newTab.textContent = "新建";
-  newTab.addEventListener("click", () => {
-    focusHostList();
-  });
-
-  const tabList = el("div", "tab-list");
-  tabList.setAttribute("role", "tablist");
-  tabList.setAttribute("aria-label", "会话标签");
-
-  const reconnect = document.createElement("button");
-  reconnect.type = "button";
-  reconnect.className = "button";
-  reconnect.textContent = "重新连接";
-  reconnect.hidden = true;
-  bar.append(newTab, tabList, reconnect);
-
+  hooks: {
+    onChange(): void;
+    onConnected(key: string, id: string): void;
+    onExit(key: string, code: number | null): void;
+    onFailed(key: string, message: string): void;
+    onShortcut(action: ShortcutAction): void;
+    onNew(): void;
+    onCycle(step: number): void;
+  },
+): TerminalHost {
   const stack = el("div", "terminal-stack");
-  const empty = el("p", "terminal-empty");
-  empty.textContent = "未打开会话";
-  stack.append(empty);
-
   const sessionError = el("p", "form-error");
   sessionError.setAttribute("role", "alert");
-  panel.append(bar, stack, sessionError);
+  panel.append(stack, sessionError);
 
-  const tabs: Tab[] = [];
-  let active: Tab | null = null;
+  const sessions = new Map<string, Session>();
+  let activeKey: string | null = null;
   let resizeFrame = 0;
-
-  reconnect.addEventListener("click", () => {
-    if (active && active.phase === "ended") {
-      void reconnectTab(active);
-    }
-  });
 
   const observer = new ResizeObserver(() => {
     scheduleFit();
   });
   observer.observe(stack);
   window.addEventListener("keydown", onWindowKeyDown, true);
-  refreshChrome();
 
-  async function connect(host: HostEntry): Promise<void> {
-    await connectOrigin({ kind: "host", host });
+  async function openDevice(key: string, name: string): Promise<{ id: string }> {
+    return openOn(ensure(key, { kind: "device", name }), false);
   }
 
-  async function connectDevice(name: string): Promise<void> {
-    await connectOrigin({ kind: "device", name });
+  async function openHost(key: string, host: HostEntry): Promise<{ id: string }> {
+    return openOn(ensure(key, { kind: "host", host }), false);
   }
 
-  async function connectOrigin(origin: TabOrigin): Promise<void> {
-    if (tabs.length >= MAX_TABS) {
-      sessionError.textContent = TAB_LIMIT_MESSAGE;
-      return;
+  function ensure(key: string, origin: TabOrigin): Session {
+    const existing = sessions.get(key);
+    if (existing) {
+      return existing;
     }
-    sessionError.textContent = "";
-    const tab = createTab(origin);
-    activate(tab);
-    await openOnTab(tab, false);
+    return createSession(key, origin);
   }
 
-  function createTab(origin: TabOrigin): Tab {
+  function createSession(key: string, origin: TabOrigin): Session {
     const view = el("div", "terminal-view");
     view.hidden = true;
     stack.append(view);
-
-    const element = el("div", "tab");
-    element.setAttribute("role", "tab");
-    element.tabIndex = 0;
-    const endedMark = el("span", "tab-mark");
-    endedMark.textContent = "○";
-    endedMark.hidden = true;
-    const title = el("span", "tab-title");
-    const close = document.createElement("button");
-    close.type = "button";
-    close.className = "tab-close";
-    close.setAttribute("aria-label", "关闭标签");
-    close.textContent = "×";
-    element.append(endedMark, title, close);
-    tabList.append(element);
-
     const term = new Terminal({
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       fontSize: 14,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-
-    const tab: Tab = {
+    const session: Session = {
+      key,
       origin,
       phase: "connecting",
       sessionId: "",
@@ -162,261 +113,194 @@ export function mountTerminal(
       term,
       fit,
       view,
-      element,
-      title,
-      endedMark,
       reapTimer: 0,
+      discarded: false,
     };
-    tabs.push(tab);
-
-    element.addEventListener("click", () => {
-      activate(tab);
-    });
-    element.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        activate(tab);
+    sessions.set(key, session);
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.isComposing) {
+        return true;
       }
-    });
-    close.addEventListener("click", (event) => {
-      event.stopPropagation();
-      requestClose(tab);
+      const action = shortcutAction(event, shortcutPlatform());
+      if (action === null) {
+        return true;
+      }
+      if (!event.defaultPrevented) {
+        hooks.onShortcut(action);
+      }
+      return false;
     });
     // xterm stops the paste event and feeds the whole clipboard string through
     // onData. Chunk on this path so a menu paste stays within the write limit.
     term.onData((data) => {
-      submitInput(tab, data);
+      submitInput(session, data);
     });
-
-    // Open only while this view is the one on screen. Fit happens later, and
-    // only for the active tab.
-    for (const other of tabs) {
-      other.view.hidden = other !== tab;
-    }
-    stack.classList.add("has-tabs");
-    empty.hidden = true;
     term.open(view);
-    refreshTitles();
-    return tab;
+    return session;
   }
 
-  async function openOnTab(tab: Tab, keepBuffer: boolean): Promise<void> {
-    const myGeneration = ++tab.generation;
-    tab.queue.invalidate();
-    window.clearTimeout(tab.reapTimer);
-    tab.reapTimer = 0;
-    tab.phase = "connecting";
-    tab.sessionId = "";
-    tab.pendingWrites = [];
-    clearTabError(tab);
+  async function openOn(session: Session, keepBuffer: boolean): Promise<{ id: string }> {
+    const myGeneration = ++session.generation;
+    session.queue.invalidate();
+    window.clearTimeout(session.reapTimer);
+    session.reapTimer = 0;
+    session.phase = "connecting";
+    session.sessionId = "";
+    session.pendingWrites = [];
+    session.discarded = false;
+    clearError(session);
     if (!keepBuffer) {
-      tab.term.reset();
+      session.term.reset();
     }
-    refreshChrome();
-    onChange();
+    hooks.onChange();
     try {
-      const opened = await openOrigin(tab.origin, (event) => {
-        if (tab.generation !== myGeneration) {
+      const opened = await openOrigin(session.origin, (event) => {
+        if (session.generation !== myGeneration || session.discarded) {
           return;
         }
-        onSessionEvent(tab, event, myGeneration);
+        onSessionEvent(session, event, myGeneration);
       });
-      if (tab.generation !== myGeneration) {
+      if (session.discarded) {
+        return opened;
+      }
+      if (session.generation !== myGeneration) {
         await closeSession(opened.id);
-        return;
+        throw new Error("会话已取消");
       }
-      tab.sessionId = opened.id;
-      if (phaseOf(tab) === "ended") {
-        tab.pendingWrites = [];
-        tab.queue.invalidate();
-        scheduleReap(tab, opened.id, myGeneration);
-        return;
+      session.sessionId = opened.id;
+      if (currentPhase(session) === "ended") {
+        session.pendingWrites = [];
+        session.queue.invalidate();
+        scheduleReap(session, opened.id, myGeneration);
+        return opened;
       }
-      tab.phase = "live";
-      // Flush before any later await so newer onData cannot jump the queue.
-      const queued = tab.pendingWrites.splice(0, tab.pendingWrites.length);
+      session.phase = "live";
+      hooks.onConnected(session.key, opened.id);
+      const queued = session.pendingWrites.splice(0, session.pendingWrites.length);
       for (const chunks of queued) {
-        if (tab.generation !== myGeneration || phaseOf(tab) !== "live") {
+        if (session.generation !== myGeneration || session.phase !== "live") {
           break;
         }
-        enqueueChunks(tab, chunks);
+        enqueueChunks(session, chunks);
       }
-      refreshChrome();
-      onChange();
-      if (active === tab) {
+      hooks.onChange();
+      if (activeKey === session.key) {
         scheduleFit();
-        tab.term.focus();
+        session.term.focus();
       }
+      return opened;
     } catch (err) {
-      if (tab.generation !== myGeneration) {
-        return;
+      if (session.discarded || session.generation !== myGeneration) {
+        throw err;
       }
-      tab.pendingWrites = [];
+      session.pendingWrites = [];
       const message = errorText(err);
-      if (keepBuffer) {
-        tab.phase = "ended";
-        showTabError(tab, message);
-        refreshChrome();
-        onChange();
-      } else {
-        removeTab(tab);
-        sessionError.textContent = message;
-      }
+      session.phase = "failed";
+      showError(session, message);
+      hooks.onFailed(session.key, message);
+      hooks.onChange();
+      throw new Error(message);
     }
   }
 
-  function onSessionEvent(tab: Tab, event: SessionEvent, generation: number): void {
+  function onSessionEvent(session: Session, event: SessionEvent, generation: number): void {
     if (event.kind === "data") {
-      tab.term.write(new Uint8Array(event.bytes));
+      session.term.write(new Uint8Array(event.bytes));
       return;
     }
-    if (tab.phase === "ended") {
+    if (session.phase === "ended" || session.phase === "failed") {
       return;
     }
     const codeText = event.code === null ? "未知" : String(event.code);
-    tab.term.write(`\r\n[会话已结束，退出码 ${codeText}]\r\n`);
-    tab.phase = "ended";
-    tab.pendingWrites = [];
-    tab.queue.invalidate();
-    refreshChrome();
-    onChange();
-    if (tab.sessionId !== "") {
-      scheduleReap(tab, tab.sessionId, generation);
+    session.term.write(`\r\n[会话已结束，退出码 ${codeText}]\r\n`);
+    session.phase = "ended";
+    session.pendingWrites = [];
+    session.queue.invalidate();
+    hooks.onExit(session.key, event.code);
+    hooks.onChange();
+    if (session.sessionId !== "") {
+      scheduleReap(session, session.sessionId, generation);
     }
   }
 
-  function scheduleReap(tab: Tab, id: string, generation: number): void {
-    window.clearTimeout(tab.reapTimer);
-    tab.reapTimer = window.setTimeout(() => {
-      tab.reapTimer = 0;
-      if (tab.generation !== generation || tab.sessionId !== id) {
+  function scheduleReap(session: Session, id: string, generation: number): void {
+    window.clearTimeout(session.reapTimer);
+    session.reapTimer = window.setTimeout(() => {
+      session.reapTimer = 0;
+      if (session.generation !== generation || session.sessionId !== id || session.discarded) {
         return;
       }
       void closeSession(id).catch((err: unknown) => {
-        if (tab.generation !== generation) {
+        if (session.generation !== generation) {
           return;
         }
-        showTabError(tab, errorText(err));
+        showError(session, errorText(err));
       });
     }, EXIT_REAP_DELAY_MS);
   }
 
-  async function reconnectTab(tab: Tab): Promise<void> {
-    if (tab.phase !== "ended") {
+  async function reconnect(key: string): Promise<void> {
+    const session = sessions.get(key);
+    if (!session || session.phase !== "ended") {
       return;
     }
-    tab.queue.invalidate();
-    tab.pendingWrites = [];
-    window.clearTimeout(tab.reapTimer);
-    tab.reapTimer = 0;
-    const oldId = tab.sessionId;
+    session.queue.invalidate();
+    session.pendingWrites = [];
+    window.clearTimeout(session.reapTimer);
+    session.reapTimer = 0;
+    const oldId = session.sessionId;
     if (oldId !== "") {
       try {
         await closeSession(oldId);
       } catch (err) {
-        sessionError.textContent = errorText(err);
+        showError(session, errorText(err));
       }
     }
-    if (active === tab) {
-      tab.term.focus();
+    if (activeKey === key) {
+      session.term.focus();
     }
-    await openOnTab(tab, true);
+    await openOn(session, true);
   }
 
-  function requestClose(tab: Tab): void {
-    if (tab.phase !== "ended" && !window.confirm("结束该会话？")) {
+  function discard(key: string): void {
+    const session = sessions.get(key);
+    if (!session) {
       return;
     }
-    const id = tab.sessionId;
-    tab.generation += 1;
-    tab.queue.invalidate();
-    tab.pendingWrites = [];
-    window.clearTimeout(tab.reapTimer);
-    removeTab(tab);
-    if (id !== "") {
-      void closeSession(id).catch((err: unknown) => {
-        sessionError.textContent = errorText(err);
-      });
+    session.discarded = true;
+    session.generation += 1;
+    session.queue.invalidate();
+    session.pendingWrites = [];
+    window.clearTimeout(session.reapTimer);
+    session.term.dispose();
+    session.view.remove();
+    sessions.delete(key);
+    if (activeKey === key) {
+      activeKey = null;
+      stack.classList.remove("has-tabs");
+    }
+    if (sessionError.textContent === session.error) {
+      sessionError.textContent = "";
     }
   }
 
-  function removeTab(tab: Tab): void {
-    const index = tabs.indexOf(tab);
-    if (index < 0) {
-      return;
-    }
-    tabs.splice(index, 1);
-    tab.term.dispose();
-    tab.view.remove();
-    tab.element.remove();
-    if (active === tab) {
-      active = null;
-      const next = tabs[index] ?? tabs[index - 1] ?? null;
-      if (next) {
-        activate(next);
-        return;
+  function activate(key: string | null): void {
+    activeKey = key;
+    let shown = false;
+    for (const session of sessions.values()) {
+      const on = session.key === key;
+      session.view.hidden = !on;
+      if (on) {
+        shown = true;
       }
     }
-    refreshTitles();
-    refreshChrome();
-    onChange();
-  }
-
-  function activate(tab: Tab): void {
-    active = tab;
-    for (const other of tabs) {
-      const on = other === tab;
-      other.view.hidden = !on;
-      other.element.classList.toggle("tab-active", on);
-      other.element.setAttribute("aria-selected", on ? "true" : "false");
-    }
-    refreshTitles();
-    refreshChrome();
-    onChange();
-    const keepLimitNotice =
-      tab.error === "" &&
-      tabs.length >= MAX_TABS &&
-      sessionError.textContent === TAB_LIMIT_MESSAGE;
-    if (!keepLimitNotice) {
-      sessionError.textContent = tab.error;
-    }
+    stack.classList.toggle("has-tabs", shown);
+    const session = key ? sessions.get(key) : undefined;
+    sessionError.textContent = session?.error ?? "";
+    hooks.onChange();
     scheduleFit();
-    if (tab.phase !== "ended") {
-      tab.term.focus();
-    }
-  }
-
-  function refreshTitles(): void {
-    const groups = new Map<string, Tab[]>();
-    for (const tab of tabs) {
-      const name = originName(tab.origin);
-      const group = groups.get(name) ?? [];
-      group.push(tab);
-      groups.set(name, group);
-    }
-    for (const [name, group] of groups) {
-      group.forEach((tab, index) => {
-        const label = index === 0 ? name : `${name} (${index + 1})`;
-        tab.title.textContent = label;
-        tab.element.title = label;
-      });
-    }
-  }
-
-  function refreshChrome(): void {
-    stack.classList.toggle("has-tabs", tabs.length > 0);
-    empty.hidden = tabs.length > 0;
-    for (const tab of tabs) {
-      const ended = tab.phase === "ended";
-      tab.element.classList.toggle("tab-ended", ended);
-      tab.endedMark.hidden = !ended;
-    }
-    reconnect.hidden = active?.phase !== "ended";
-    const atLimit = tabs.length >= MAX_TABS;
-    newTab.disabled = atLimit;
-    newTab.title = atLimit ? TAB_LIMIT_MESSAGE : "";
-    if (!atLimit && sessionError.textContent === TAB_LIMIT_MESSAGE) {
-      sessionError.textContent = active?.error ?? "";
+    if (session && session.phase !== "ended" && session.phase !== "failed") {
+      session.term.focus();
     }
   }
 
@@ -426,88 +310,64 @@ export function mountTerminal(
     }
     resizeFrame = window.requestAnimationFrame(() => {
       resizeFrame = 0;
-      if (active) {
-        applyFit(active);
+      const session = activeKey ? sessions.get(activeKey) : undefined;
+      if (session) {
+        applyFit(session);
       }
     });
   }
 
-  function applyFit(tab: Tab): void {
-    if (tab !== active || tab.view.hidden) {
+  function applyFit(session: Session): void {
+    if (session.key !== activeKey || session.view.hidden) {
       return;
     }
-    tab.fit.fit();
-    if (tab.phase !== "live" || tab.sessionId === "") {
+    session.fit.fit();
+    if (session.phase !== "live" || session.sessionId === "") {
       return;
     }
-    const cols = tab.term.cols;
-    const rows = tab.term.rows;
+    const cols = session.term.cols;
+    const rows = session.term.rows;
     if (cols < 1 || rows < 1) {
       return;
     }
-    const id = tab.sessionId;
+    const id = session.sessionId;
     void resizeSession(id, cols, rows).catch((err: unknown) => {
-      if (tab.phase !== "live" || tab.sessionId !== id) {
+      if (session.phase !== "live" || session.sessionId !== id) {
         return;
       }
-      showTabError(tab, errorText(err));
+      showError(session, errorText(err));
     });
   }
 
   function onWindowKeyDown(event: KeyboardEvent): void {
-    if (event.altKey || typingInForm(event)) {
+    if (event.isComposing || event.altKey || typingInForm(event)) {
       return;
     }
     if (event.ctrlKey && !event.metaKey && event.key === "Tab") {
       consume(event);
-      cycleTab(event.shiftKey ? -1 : 1);
+      hooks.onCycle(event.shiftKey ? -1 : 1);
       return;
     }
-
-    const mac = isMacPlatform();
+    const action = shortcutAction(event, shortcutPlatform());
+    if (action) {
+      consume(event);
+      if (!(action.type === "close" && event.repeat)) {
+        hooks.onShortcut(action);
+      }
+      return;
+    }
+    const mac = shortcutPlatform() === "mac";
     if (mac) {
       if (!event.metaKey || event.ctrlKey) {
         return;
       }
-      handleCommandShortcut(event);
-      return;
-    }
-
-    // Letter shortcuts need Shift. Bare Ctrl+C / Ctrl+W must reach the shell.
-    if (!event.ctrlKey || event.metaKey) {
-      return;
-    }
-    if (/^[1-8]$/.test(event.key)) {
-      consume(event);
-      jumpTab(Number(event.key));
-      return;
-    }
-    if (!event.shiftKey) {
-      return;
-    }
-    handleCommandShortcut(event);
-  }
-
-  function handleCommandShortcut(event: KeyboardEvent): void {
-    if (/^[1-8]$/.test(event.key)) {
-      consume(event);
-      jumpTab(Number(event.key));
+    } else if (!event.ctrlKey || event.metaKey || !event.shiftKey) {
       return;
     }
     switch (event.key.toUpperCase()) {
       case "T":
         consume(event);
-        if (tabs.length >= MAX_TABS) {
-          sessionError.textContent = TAB_LIMIT_MESSAGE;
-          break;
-        }
-        focusHostList();
-        break;
-      case "W":
-        consume(event);
-        if (active) {
-          requestClose(active);
-        }
+        hooks.onNew();
         break;
       case "C":
         consume(event);
@@ -517,12 +377,14 @@ export function mountTerminal(
         break;
       case "V":
         consume(event);
-        if (active) {
-          const tab = active;
-          void pasteClipboard(tab).catch((err: unknown) => {
-            showTabError(tab, errorText(err));
-          });
-        }
+        void pasteActive().catch((err: unknown) => {
+          const session = active();
+          if (session) {
+            showError(session, errorText(err));
+          } else {
+            sessionError.textContent = errorText(err);
+          }
+        });
         break;
       default:
         break;
@@ -530,10 +392,11 @@ export function mountTerminal(
   }
 
   async function copySelection(): Promise<void> {
-    if (!active) {
+    const session = active();
+    if (!session) {
       return;
     }
-    const text = active.term.getSelection();
+    const text = session.term.getSelection();
     if (text === "") {
       return;
     }
@@ -543,101 +406,87 @@ export function mountTerminal(
     await navigator.clipboard.writeText(text);
   }
 
-  async function pasteClipboard(tab: Tab): Promise<void> {
-    if (phaseOf(tab) === "ended") {
+  async function pasteActive(): Promise<void> {
+    const session = active();
+    if (!session || blocksInput(session)) {
       return;
     }
-    const generation = tab.generation;
+    const generation = session.generation;
     if (!navigator.clipboard?.readText) {
       throw new Error("无法读取剪贴板");
     }
     const text = await navigator.clipboard.readText();
-    if (tab.generation !== generation || phaseOf(tab) === "ended") {
+    if (session.generation !== generation || blocksInput(session)) {
       return;
     }
-    submitInput(tab, text);
+    submitInput(session, text);
   }
 
-  function submitInput(tab: Tab, text: string): void {
-    if (phaseOf(tab) === "ended" || text === "") {
+  function submitInput(session: Session, text: string): void {
+    if (blocksInput(session) || text === "") {
       return;
     }
     const chunks = splitWriteChunks(text);
     if (chunks.length === 0) {
       return;
     }
-    clearTabError(tab);
-    if (tab.sessionId === "") {
-      tab.pendingWrites.push(chunks);
+    clearError(session);
+    if (session.sessionId === "") {
+      session.pendingWrites.push(chunks);
       return;
     }
-    enqueueChunks(tab, chunks);
+    enqueueChunks(session, chunks);
   }
 
-  function enqueueChunks(tab: Tab, chunks: readonly string[]): void {
-    const generation = tab.generation;
-    const id = tab.sessionId;
-    void tab.queue.enqueue(
+  function enqueueChunks(session: Session, chunks: readonly string[]): void {
+    const generation = session.generation;
+    const id = session.sessionId;
+    void session.queue.enqueue(
       chunks,
       async (chunk) => {
-        if (generation !== tab.generation || tab.sessionId !== id || phaseOf(tab) === "ended") {
+        if (generation !== session.generation || session.sessionId !== id || blocksInput(session)) {
           return;
         }
         await writeSession(id, chunk);
       },
       (error) => {
-        if (generation !== tab.generation || tab.sessionId !== id) {
+        if (generation !== session.generation || session.sessionId !== id) {
           return;
         }
-        showTabError(tab, errorText(error));
+        showError(session, errorText(error));
       },
     );
   }
 
-  function showTabError(tab: Tab, message: string): void {
-    tab.error = message;
-    if (active === tab) {
+  function showError(session: Session, message: string): void {
+    session.error = message;
+    if (activeKey === session.key) {
       sessionError.textContent = message;
     }
   }
 
-  function clearTabError(tab: Tab): void {
-    const previous = tab.error;
-    tab.error = "";
-    if (active === tab && sessionError.textContent === previous) {
+  function clearError(session: Session): void {
+    const previous = session.error;
+    session.error = "";
+    if (activeKey === session.key && sessionError.textContent === previous) {
       sessionError.textContent = "";
     }
   }
 
-  function cycleTab(step: number): void {
-    if (!active || tabs.length === 0) {
-      return;
+  function active(): Session | undefined {
+    if (!activeKey) {
+      return undefined;
     }
-    const index = tabs.indexOf(active);
-    const next = tabs[(index + step + tabs.length) % tabs.length];
-    if (next) {
-      activate(next);
-    }
-  }
-
-  function jumpTab(number: number): void {
-    const tab = tabs[number - 1];
-    if (tab) {
-      activate(tab);
-    }
+    return sessions.get(activeKey);
   }
 
   return {
-    connect,
-    connectDevice,
-    activeHostId: () => (active?.origin.kind === "host" ? active.origin.host.id : null),
-    activeDeviceName: () => (active?.origin.kind === "device" ? active.origin.name : null),
-    canOpenTab: () => tabs.length < MAX_TABS,
+    openDevice,
+    openHost,
+    discard,
+    activate,
+    reconnect,
   };
-}
-
-function originName(origin: TabOrigin): string {
-  return origin.kind === "host" ? origin.host.name : origin.name;
 }
 
 function openOrigin(
@@ -650,19 +499,23 @@ function openOrigin(
   return openTopologyDevice(origin.name, onEvent);
 }
 
-function phaseOf(tab: Tab): Phase {
-  return tab.phase;
+function currentPhase(session: Session): Phase {
+  return session.phase;
 }
 
-function isMacPlatform(): boolean {
+function blocksInput(session: Session): boolean {
+  return session.phase === "ended" || session.phase === "failed";
+}
+
+export function shortcutPlatform(): "mac" | "windows" {
   const withData = navigator as Navigator & { userAgentData?: { platform?: string } };
   const platform = withData.userAgentData?.platform ?? navigator.platform;
-  return /mac/i.test(platform);
+  return /mac/i.test(platform) ? "mac" : "windows";
 }
 
 function typingInForm(event: KeyboardEvent): boolean {
   const target = event.target;
-  if (!(target instanceof HTMLElement) || target.closest(".terminal-panel")) {
+  if (!(target instanceof HTMLElement) || target.closest(".terminal-panel, .xterm")) {
     return false;
   }
   return target.matches("input, textarea, select, [contenteditable='true']");
