@@ -1,4 +1,5 @@
 import { statusLabel, type TabModel, type TabStrip } from "./tabs.ts";
+import { uiIcon, type UiIconName } from "./ui-icons.ts";
 
 export interface TabBar {
   render(strip: TabStrip): void;
@@ -20,18 +21,15 @@ export function mountTabBar(
   list.setAttribute("role", "tablist");
   list.setAttribute("aria-label", "标签");
 
-  const fresh = document.createElement("button");
-  fresh.type = "button";
-  fresh.className = "button tabbar-new";
-  fresh.textContent = "新建";
+  const fresh = toolButton("plus", "新建", { iconOnly: true });
+  fresh.classList.add("tabbar-new");
+  fresh.title = "新建（回到拓扑首页）";
   fresh.addEventListener("click", () => {
     handlers.onNew();
   });
 
-  const reconnect = document.createElement("button");
-  reconnect.type = "button";
-  reconnect.className = "button tabbar-reconnect";
-  reconnect.textContent = "重新连接";
+  const reconnect = toolButton("reconnect", "重新连接");
+  reconnect.classList.add("tabbar-reconnect", "attention");
   reconnect.hidden = true;
   reconnect.addEventListener("click", () => {
     handlers.onReconnect();
@@ -42,7 +40,8 @@ export function mountTabBar(
   alert.hidden = true;
 
   const end = el("div", "tabbar-end");
-  bar.append(fresh, list, reconnect, end);
+  end.append(reconnect);
+  bar.append(list, fresh, end);
   parent.prepend(bar, alert);
 
   function render(strip: TabStrip): void {
@@ -64,6 +63,9 @@ export function mountTabBar(
     const caption = tabCaption(tab);
     element.title = caption;
     element.setAttribute("aria-label", caption);
+    if (tab.kind === "home") {
+      element.insertAdjacentHTML("beforeend", uiIcon("topology"));
+    }
     if (tab.kind === "session") {
       const dot = el("span", `tab-status tab-status-${tab.status}`);
       dot.setAttribute("aria-hidden", "true");
@@ -78,7 +80,7 @@ export function mountTabBar(
       close.type = "button";
       close.className = "tab-close";
       close.setAttribute("aria-label", "关闭标签");
-      close.textContent = "×";
+      close.innerHTML = uiIcon("close");
       close.addEventListener("click", (event) => {
         event.stopPropagation();
         handlers.onClose(tab.key);
@@ -106,6 +108,27 @@ export function mountTabBar(
       alert.hidden = message === "";
     },
   };
+}
+
+/** Flat toolbar button with an icon and an optional visible label. */
+export function toolButton(
+  icon: UiIconName,
+  label: string,
+  options: { iconOnly?: boolean } = {},
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = options.iconOnly ? "tool-button icon-only" : "tool-button";
+  button.setAttribute("aria-label", label);
+  button.insertAdjacentHTML("beforeend", uiIcon(icon));
+  if (options.iconOnly) {
+    button.title = label;
+  } else {
+    const text = el("span", "tool-label");
+    text.textContent = label;
+    button.append(text);
+  }
+  return button;
 }
 
 function tabCaption(tab: TabModel): string {

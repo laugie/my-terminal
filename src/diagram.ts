@@ -16,19 +16,27 @@ const KEYWORDS: ReadonlyArray<readonly [DeviceKind, readonly string[]]> = [
   ["server", ["server", "srv", "db", "app", "web", "服务器"]],
 ];
 
-const NODE_W = 120;
-const NODE_H = 96;
-const NODE_COLS = 4;
-const GROUP_COLS = 3;
+/** Layout width when the caller does not pass one (tests, preview script). */
+const DEFAULT_WIDTH = 1280;
+const MIN_WIDTH = 360;
+/** One device cell. */
+const NODE_W = 156;
+const NODE_H = 132;
+/** A stretched region spreads its cells, but never wider than this. */
+const MAX_CELL_W = 240;
 const PAD_X = 16;
-const PAD_TOP = 40;
-const PAD_BOTTOM = 16;
-const GAP = 28;
-const MARGIN = 56;
-const CONTAINER_W = 1040;
-const ICON = 48;
-const ICON_X = (NODE_W - ICON) / 2;
-const ICON_Y = 6;
+const PAD_TOP = 52;
+const PAD_BOTTOM = 12;
+const GAP = 24;
+const MARGIN = 24;
+/** Rounded tile behind each device icon. */
+const TILE = 60;
+const TILE_X = (NODE_W - TILE) / 2;
+const TILE_Y = 12;
+const ICON = 40;
+const NAME_Y = TILE_Y + TILE + 22;
+const ADDRESS_Y = NAME_Y + 19;
+const LABEL_BOTTOM = ADDRESS_Y + 8;
 const OPEN_LIMIT_HINT = TAB_LIMIT_MESSAGE;
 
 export interface DiagramGroup {
@@ -80,55 +88,84 @@ export function deviceKind(device: { name: string; type?: unknown }): DeviceKind
   return guessKind(device.name);
 }
 
-export function buildDiagram(view: TopologyView): DiagramModel {
+export function buildDiagram(view: TopologyView, options?: { width?: number }): DiagramModel {
+  const width = Math.max(MIN_WIDTH, Math.floor(options?.width || DEFAULT_WIDTH));
+  const inner = width - MARGIN * 2;
+  const maxCols = Math.max(1, Math.floor((inner - PAD_X * 2) / NODE_W));
+  const sized = view.regions.map((region) => {
+    const count = region.devices.length;
+    const cols = Math.max(1, Math.min(count, maxCols));
+    const rows = Math.ceil(count / cols);
+    return {
+      region,
+      cols,
+      width: PAD_X * 2 + cols * NODE_W,
+      height: PAD_TOP + PAD_BOTTOM + rows * NODE_H,
+    };
+  });
+
+  // Regions flow left to right in file order and wrap at the available width.
+  const rows: Array<typeof sized> = [];
+  let used = 0;
+  for (const item of sized) {
+    const current = rows[rows.length - 1];
+    if (current && used + GAP + item.width <= inner) {
+      current.push(item);
+      used += GAP + item.width;
+      continue;
+    }
+    rows.push([item]);
+    used = item.width;
+  }
+
   const groups: DiagramGroup[] = [];
   const nodes: DiagramNode[] = [];
-  let cursorX = MARGIN;
   let cursorY = MARGIN;
-  let rowHeight = 0;
-  let rowCount = 0;
   let maxX = MARGIN;
-  let maxY = MARGIN;
-
-  for (const region of view.regions) {
-    const size = groupSize(region.devices.length);
-    const wrap =
-      rowCount >= GROUP_COLS || (rowCount > 0 && cursorX + size.width > MARGIN + CONTAINER_W);
-    if (wrap) {
-      cursorX = MARGIN;
-      cursorY += rowHeight + GAP;
-      rowHeight = 0;
-      rowCount = 0;
-    }
-    const group: DiagramGroup = {
-      name: region.name,
-      x: cursorX,
-      y: cursorY,
-      width: size.width,
-      height: size.height,
-    };
-    groups.push(group);
-    region.devices.forEach((device, index) => {
-      const col = index % NODE_COLS;
-      const row = Math.floor(index / NODE_COLS);
-      nodes.push({
-        name: device.name,
-        region: region.name,
-        x: group.x + PAD_X + col * NODE_W,
-        y: group.y + PAD_TOP + row * NODE_H,
-        kind: deviceKind({ name: device.name, type: device.type }),
-        host: device.host,
-        port: device.port,
-        mobile: device.mobile,
-        presence: device.presence,
+  for (const row of rows) {
+    // Each row is stretched to the full width, shared out by natural width.
+    const natural = row.reduce((sum, item) => sum + item.width, 0);
+    const extra = Math.max(0, inner - natural - GAP * (row.length - 1));
+    const height = Math.max(...row.map((item) => item.height));
+    let cursorX = MARGIN;
+    let grown = 0;
+    row.forEach((item, index) => {
+      const share =
+        index === row.length - 1
+          ? extra - grown
+          : Math.floor((extra * item.width) / natural);
+      grown += share;
+      const group: DiagramGroup = {
+        name: item.region.name,
+        x: cursorX,
+        y: cursorY,
+        width: item.width + share,
+        height,
+      };
+      groups.push(group);
+      const cell = Math.min((group.width - PAD_X * 2) / item.cols, MAX_CELL_W);
+      const offset = (group.width - PAD_X * 2 - cell * item.cols) / 2;
+      item.region.devices.forEach((device, deviceIndex) => {
+        const col = deviceIndex % item.cols;
+        const line = Math.floor(deviceIndex / item.cols);
+        nodes.push({
+          name: device.name,
+          region: item.region.name,
+          x: Math.round(group.x + PAD_X + offset + col * cell + (cell - NODE_W) / 2),
+          y: group.y + PAD_TOP + line * NODE_H,
+          kind: deviceKind({ name: device.name, type: device.type }),
+          host: device.host,
+          port: device.port,
+          mobile: device.mobile,
+          presence: device.presence,
+        });
       });
+      cursorX += group.width + GAP;
+      maxX = Math.max(maxX, group.x + group.width);
     });
-    cursorX += size.width + GAP;
-    rowHeight = Math.max(rowHeight, size.height);
-    rowCount += 1;
-    maxX = Math.max(maxX, group.x + group.width);
-    maxY = Math.max(maxY, group.y + group.height);
+    cursorY += height + GAP;
   }
+  const maxY = rows.length > 0 ? cursorY - GAP : MARGIN;
 
   const byName = new Map(nodes.map((node) => [node.name, node]));
   const edges: DiagramEdge[] = [];
@@ -155,7 +192,7 @@ export function buildDiagram(view: TopologyView): DiagramModel {
     groups,
     nodes,
     edges,
-    width: maxX + MARGIN,
+    width: Math.max(width, maxX + MARGIN),
     height: maxY + MARGIN,
   };
 }
@@ -172,11 +209,12 @@ export function renderDiagramSvg(
       if (!from || !to) {
         return "";
       }
-      const [start, end] = endpoints(from, to, edge.crossRegion);
-      const path = curve(start[0], start[1], end[0], end[1], edge.crossRegion);
+      const route = routeOf(from, to);
+      const [start, end] = endpoints(from, to, route);
+      const path = curve(start[0], start[1], end[0], end[1], edge.crossRegion, route);
       const cls = edge.crossRegion ? "jump-edge cross-region" : "jump-edge";
-      const dash = edge.crossRegion ? ' stroke-dasharray="6 4"' : "";
-      return `<path class="${cls}" d="${path}" fill="none" stroke="#8eb4d4" stroke-width="1.6"${dash} marker-end="url(#diagram-jump-arrow)"/>`;
+      const dash = edge.crossRegion ? ' stroke-dasharray="7 5"' : "";
+      return `<path class="${cls}" d="${path}" fill="none" stroke="#79a8ff" stroke-width="2.25" stroke-linecap="round"${dash} marker-end="url(#diagram-jump-arrow)"/>`;
     })
     .join("");
 
@@ -185,8 +223,8 @@ export function renderDiagramSvg(
       const title = escapeXml(group.name);
       return (
         `<g>` +
-        `<rect class="region-frame" x="${group.x}" y="${group.y}" width="${group.width}" height="${group.height}" rx="12" fill="#252526" fill-opacity="0.78" stroke="#3c3c3c" stroke-width="1.5"/>` +
-        `<text class="diagram-region-title" x="${group.x + 16}" y="${group.y + 26}" fill="#e6e6e6" font-size="14" font-weight="600">${title}</text>` +
+        `<rect class="region-frame" x="${group.x}" y="${group.y}" width="${group.width}" height="${group.height}" rx="14" fill="#151a21" stroke="#262d38" stroke-width="1"/>` +
+        `<text class="diagram-region-title" x="${group.x + 20}" y="${group.y + 33}" fill="#e6edf3" font-size="16" font-weight="600">${title}</text>` +
         `</g>`
       );
     })
@@ -197,8 +235,8 @@ export function renderDiagramSvg(
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" class="diagram" viewBox="0 0 ${model.width} ${model.height}" width="${model.width}" height="${model.height}" role="group" font-family="ui-sans-serif, system-ui, sans-serif">` +
     `<defs>${iconSymbols()}` +
-    `<marker id="diagram-jump-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">` +
-    `<path d="M1 1.2 8.2 5 1 8.8" fill="none" stroke="#8eb4d4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>` +
+    `<marker id="diagram-jump-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="13" markerHeight="13" markerUnits="userSpaceOnUse" orient="auto">` +
+    `<path class="jump-arrow" d="M1 1.5 11 6 1 10.5 3.5 6z" fill="#79a8ff"/>` +
     `</marker></defs>` +
     frames +
     `<g class="diagram-edges">${edges}</g>` +
@@ -231,21 +269,24 @@ function renderNode(node: DiagramNode, index: number, canOpen: boolean): string 
   const title = `${name} ${address}${node.mobile ? " 移动设备" : ""}`;
   const shownTitle = canOpen ? title : `${title} ${OPEN_LIMIT_HINT}`;
   const disabled = canOpen ? "" : ' aria-disabled="true"';
-  const iconX = node.x + ICON_X;
-  const iconY = node.y + ICON_Y;
+  const tileX = node.x + TILE_X;
+  const tileY = node.y + TILE_Y;
+  const iconX = tileX + (TILE - ICON) / 2;
+  const iconY = tileY + (TILE - ICON) / 2;
   const center = node.x + NODE_W / 2;
   const presence = presenceMark(node);
-  const badge = node.mobile ? mobileBadge(iconX + ICON - 8, iconY - 2) : "";
+  const badge = node.mobile ? mobileBadge(tileX + TILE - 11, tileY - 7) : "";
   return (
     `<g class="device" role="button" tabindex="0" data-kind="${node.kind}" data-device-name="${name}" aria-label="${label}"${disabled}>` +
     `<title>${shownTitle}</title>` +
-    `<rect class="diagram-node-hit" x="${node.x + 4}" y="${node.y + 2}" width="${NODE_W - 8}" height="${NODE_H - 4}" rx="8" fill="transparent" stroke="transparent" stroke-width="2"/>` +
-    `<use href="#diagram-icon-${node.kind}" x="${iconX}" y="${iconY}" width="${ICON}" height="${ICON}" color="#d7d7d7"/>` +
+    `<rect class="diagram-node-hit" x="${node.x + 4}" y="${node.y + 2}" width="${NODE_W - 8}" height="${NODE_H - 8}" rx="12" fill="transparent" stroke="transparent" stroke-width="1.5"/>` +
+    `<rect class="diagram-tile" x="${tileX}" y="${tileY}" width="${TILE}" height="${TILE}" rx="16" fill="#232a35" stroke="#354050" stroke-width="1.5"/>` +
+    `<use class="diagram-glyph" href="#diagram-icon-${node.kind}" x="${iconX}" y="${iconY}" width="${ICON}" height="${ICON}" color="#d8e1ec"/>` +
     presence +
     badge +
-    `<text class="diagram-name" x="${center}" y="${node.y + 70}" text-anchor="middle" fill="#e6e6e6" font-size="12" clip-path="url(#diagram-clip-${index})">${name}</text>` +
-    `<text class="diagram-address" x="${center}" y="${node.y + 86}" text-anchor="middle" fill="#9a9a9a" font-size="11" clip-path="url(#diagram-clip-${index})">${address}</text>` +
-    `<clipPath id="diagram-clip-${index}"><rect x="${node.x + 4}" y="${node.y + 56}" width="${NODE_W - 8}" height="36"/></clipPath>` +
+    `<text class="diagram-name" x="${center}" y="${node.y + NAME_Y}" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="500" clip-path="url(#diagram-clip-${index})">${name}</text>` +
+    `<text class="diagram-address" x="${center}" y="${node.y + ADDRESS_Y}" text-anchor="middle" fill="#9ba7b6" font-size="12" clip-path="url(#diagram-clip-${index})">${address}</text>` +
+    `<clipPath id="diagram-clip-${index}"><rect x="${node.x + 6}" y="${node.y + TILE_Y + TILE + 2}" width="${NODE_W - 12}" height="${LABEL_BOTTOM - TILE_Y - TILE}"/></clipPath>` +
     `</g>`
   );
 }
@@ -254,35 +295,23 @@ function presenceMark(node: DiagramNode): string {
   if (node.presence === "none") {
     return "";
   }
-  const cx = node.x + ICON_X + 8;
-  const cy = node.y + ICON_Y + ICON - 8;
+  const cx = node.x + TILE_X + 4;
+  const cy = node.y + TILE_Y + TILE - 4;
   if (node.presence === "unknown") {
-    return `<circle class="diagram-presence diagram-presence-unknown" cx="${cx}" cy="${cy}" r="4" fill="none" stroke="#e6c98a" stroke-width="1.5"/>`;
+    return `<circle class="diagram-presence diagram-presence-unknown" cx="${cx}" cy="${cy}" r="5.5" fill="#151a21" stroke="#d6a64a" stroke-width="2"/>`;
   }
-  const fill = node.presence === "online" ? "#3dd68c" : "#8a8a8a";
+  const fill = node.presence === "online" ? "#3fb950" : "#6e7a8a";
   const tone = node.presence === "online" ? "online" : "offline";
-  return `<circle class="diagram-presence diagram-presence-${tone}" cx="${cx}" cy="${cy}" r="4" fill="${fill}"/>`;
+  return `<circle class="diagram-presence diagram-presence-${tone}" cx="${cx}" cy="${cy}" r="6" fill="${fill}" stroke="#151a21" stroke-width="2.5"/>`;
 }
 
 function mobileBadge(x: number, y: number): string {
   return (
     `<g class="mobile-badge" transform="translate(${x} ${y})">` +
-    `<circle cx="8" cy="8" r="8" fill="#163528" stroke="#3dd68c" stroke-width="1.4"/>` +
-    `<rect x="5" y="3.5" width="6" height="9" rx="1.2" fill="none" stroke="#b7e4cf" stroke-width="1.2"/>` +
+    `<circle cx="9" cy="9" r="9" fill="#12301f" stroke="#3fb950" stroke-width="1.5"/>` +
+    `<rect x="5.75" y="4" width="6.5" height="10" rx="1.4" fill="none" stroke="#9be3ad" stroke-width="1.3"/>` +
     `</g>`
   );
-}
-
-function groupSize(count: number): { width: number; height: number } {
-  if (count <= 0) {
-    return { width: PAD_X * 2 + NODE_W, height: PAD_TOP + PAD_BOTTOM };
-  }
-  const cols = Math.min(NODE_COLS, count);
-  const rows = Math.ceil(count / NODE_COLS);
-  return {
-    width: PAD_X * 2 + cols * NODE_W,
-    height: PAD_TOP + PAD_BOTTOM + rows * NODE_H,
-  };
 }
 
 function guessKind(name: string): DeviceKind {
@@ -350,39 +379,91 @@ function hasKey(event: Event): event is Event & { key: string } {
   return "key" in event && typeof event.key === "string";
 }
 
-function iconCenter(node: DiagramNode): [number, number] {
-  return [node.x + ICON_X + ICON / 2, node.y + ICON_Y + ICON / 2];
+function tileCenter(node: DiagramNode): [number, number] {
+  return [node.x + TILE_X + TILE / 2, node.y + TILE_Y + TILE / 2];
 }
 
+/**
+ * Edges leave and enter at the icon tiles. A mostly vertical edge leaves a
+ * lower node above its tile and an upper node below its labels, so the line
+ * never runs through the name or address.
+ */
 function endpoints(
   from: DiagramNode,
   to: DiagramNode,
-  cross: boolean,
+  route: EdgeRoute,
 ): [[number, number], [number, number]] {
-  const [x1, y1] = iconCenter(from);
-  const [x2, y2] = iconCenter(to);
-  if (cross && Math.abs(y2 - y1) > 48) {
-    const dir = y2 > y1 ? 1 : -1;
+  const [x1, y1] = tileCenter(from);
+  const [x2, y2] = tileCenter(to);
+  if (route === "over") {
     return [
-      [x1, y1 + dir * 28],
-      [x2, y2 - dir * 34],
+      [x1, y1 - TILE / 2 - 4],
+      [x2, y2 - TILE / 2 - 6],
     ];
   }
-  return [travel(x1, y1, x2, y2, 26), travel(x2, y2, x1, y1, 30)];
+  if (route === "vertical") {
+    const below = LABEL_BOTTOM - TILE_Y - TILE / 2;
+    if (y2 > y1) {
+      return [
+        [x1, y1 + below + 4],
+        [x2, y2 - TILE / 2 - 6],
+      ];
+    }
+    return [
+      [x1, y1 - TILE / 2 - 4],
+      [x2, y2 + below + 6],
+    ];
+  }
+  return [exitTile(x1, y1, x2, y2, 6), exitTile(x2, y2, x1, y1, 8)];
 }
 
-function travel(x1: number, y1: number, x2: number, y2: number, distance: number): [number, number] {
+/** Point where the ray from the tile center toward (x2, y2) leaves the tile, plus a gap. */
+function exitTile(x1: number, y1: number, x2: number, y2: number, gap: number): [number, number] {
   const dx = x2 - x1;
   const dy = y2 - y1;
   const len = Math.hypot(dx, dy) || 1;
-  const scale = distance / len;
-  return [x1 + dx * scale, y1 + dy * scale];
+  const ux = dx / len;
+  const uy = dy / len;
+  const half = TILE / 2;
+  const toEdge = Math.min(
+    ux === 0 ? Infinity : half / Math.abs(ux),
+    uy === 0 ? Infinity : half / Math.abs(uy),
+  );
+  const distance = toEdge + gap;
+  return [x1 + ux * distance, y1 + uy * distance];
 }
 
-function curve(x1: number, y1: number, x2: number, y2: number, cross: boolean): string {
+/**
+ * vertical: different rows. over: same row but not neighbours, so the edge
+ * arcs above the icons instead of crossing the nodes in between. arc: neighbours.
+ */
+type EdgeRoute = "vertical" | "over" | "arc";
+
+function routeOf(from: DiagramNode, to: DiagramNode): EdgeRoute {
+  const [x1, y1] = tileCenter(from);
+  const [x2, y2] = tileCenter(to);
+  if (Math.abs(y2 - y1) > NODE_H / 2) {
+    return "vertical";
+  }
+  return Math.abs(x2 - x1) > NODE_W * 1.5 ? "over" : "arc";
+}
+
+function curve(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  cross: boolean,
+  route: EdgeRoute,
+): string {
   const dx = x2 - x1;
   const dy = y2 - y1;
-  if (cross && Math.abs(dy) > 48) {
+  if (route === "over") {
+    // Peak stays below the region titles.
+    const top = Math.round(Math.min(y1, y2) - 22);
+    return `M ${Math.round(x1)} ${Math.round(y1)} C ${Math.round(x1)} ${top}, ${Math.round(x2)} ${top}, ${Math.round(x2)} ${Math.round(y2)}`;
+  }
+  if (route === "vertical") {
     const midY = Math.round((y1 + y2) / 2);
     return `M ${Math.round(x1)} ${Math.round(y1)} C ${Math.round(x1)} ${midY}, ${Math.round(x2)} ${midY}, ${Math.round(x2)} ${Math.round(y2)}`;
   }

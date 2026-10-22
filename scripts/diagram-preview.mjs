@@ -67,10 +67,10 @@ await writeFile(
   <meta charset="utf-8" />
   <title>my-terminal</title>
   <style>
-    html, body { margin: 0; background: #1e1e1e; color: #e6e6e6; font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; }
+    html, body { margin: 0; background: #0e1116; color: #e6edf3; font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; }
     svg text { font-family: ui-sans-serif, system-ui, "WenQuanYi Micro Hei", "Droid Sans Fallback", sans-serif; }
-    main { box-sizing: border-box; max-width: 1080px; margin: 0 auto; padding: 24px 20px 40px; }
-    h1 { margin: 0 0 16px; font-size: 20px; font-weight: 600; }
+    main { box-sizing: border-box; padding: 24px 0 40px; }
+    h1 { margin: 0 24px 16px; font-size: 20px; font-weight: 600; }
     .scroll { overflow-x: auto; }
   </style>
 </head>
