@@ -9,7 +9,7 @@ import {
 import { loadTopology, type TopologyView } from "./topology.ts";
 import { renderTopology, syncDeviceOpenState } from "./topology-view.ts";
 import { mountTerminal, type TerminalHost } from "./terminal.ts";
-import { mountTabBar, type TabBar } from "./tab-bar.ts";
+import { mountTabBar, toolButton, type TabBar } from "./tab-bar.ts";
 import { closeSession } from "./session.ts";
 import { sessionLimitMessage, TabStrip, type ShortcutAction } from "./tabs.ts";
 import { authSettings, authStatus, type AuthStateName } from "./auth.ts";
@@ -25,19 +25,11 @@ const app: HTMLElement = appElement;
 
 type Page = "topology" | "manual";
 
-const header = el("header", "top");
-const title = el("h1", "title");
-title.textContent = "my-terminal";
-const nav = el("nav", "nav");
-nav.setAttribute("aria-label", "页面");
-const topologyButton = navButton("拓扑");
-const manualButton = navButton("手动服务器");
-nav.append(topologyButton, manualButton);
-const refreshButton = document.createElement("button");
-refreshButton.type = "button";
-refreshButton.className = "button";
-refreshButton.textContent = "重新加载";
-header.append(title, nav, refreshButton);
+// The home tab is the topology page. Manual servers share that tab and are
+// toggled from the toolbar, so "拓扑" appears only once.
+const manualButton = toolButton("servers", "手动服务器");
+manualButton.setAttribute("aria-pressed", "false");
+const refreshButton = toolButton("reload", "重新加载");
 
 const statusBar = el("div", "status");
 statusBar.setAttribute("role", "status");
@@ -70,17 +62,23 @@ form.append(submit);
 const formError = el("p", "form-error");
 formError.setAttribute("role", "alert");
 formSection.append(formTitle, form, formError);
-manualRoot.append(list, formSection);
+const manualInner = el("div", "manual-inner");
+manualInner.append(list, formSection);
+manualRoot.append(manualInner);
 
 const terminalPanel = el("section", "terminal-panel");
 terminalPanel.hidden = true;
 const shell = el("div", "shell");
 shell.hidden = true;
-shell.append(header, statusBar, topologyRoot, manualRoot, terminalPanel);
+shell.append(statusBar, topologyRoot, manualRoot, terminalPanel);
 app.append(shell);
 
 const tabBar: TabBar = mountTabBar(shell, {
   onActivate: (key) => {
+    if (strip.tabs[0]?.key === key) {
+      showPage("topology");
+      return;
+    }
     present(key);
   },
   onClose: (key) => {
@@ -150,14 +148,10 @@ host.terminal = terminal;
 tabBar.render(strip);
 
 const settingsSlot = el("div", "settings-slot");
-const settingsButton = document.createElement("button");
-settingsButton.type = "button";
-settingsButton.className = "button";
-settingsButton.setAttribute("aria-label", "设置");
+const settingsButton = toolButton("gear", "设置", { iconOnly: true });
 settingsButton.setAttribute("aria-expanded", "false");
-settingsButton.textContent = "⚙";
 settingsSlot.append(settingsButton);
-tabBar.end.append(settingsSlot);
+tabBar.end.append(manualButton, refreshButton, el("span", "toolbar-divider"), settingsSlot);
 mountSettings(settingsButton);
 
 let page: Page = "topology";
@@ -168,11 +162,28 @@ let topologyBusy = false;
 let hostsBusy = false;
 let manualLoaded = false;
 let topologyView: TopologyView | null = null;
+let diagramWidth = 0;
+let diagramFrame = 0;
 
-topologyButton.addEventListener("click", () => {
-  showPage("topology");
-});
+// Re-lay out the diagram when the window width changes.
+new ResizeObserver(() => {
+  if (diagramFrame !== 0) {
+    return;
+  }
+  diagramFrame = window.requestAnimationFrame(() => {
+    diagramFrame = 0;
+    const width = topologyRoot.clientWidth;
+    if (topologyView && width > 0 && width !== diagramWidth) {
+      paintTopology();
+    }
+  });
+}).observe(topologyRoot);
+
 manualButton.addEventListener("click", () => {
+  if (page === "manual" && viewingHome()) {
+    showPage("topology");
+    return;
+  }
   showPage("manual");
   if (!manualLoaded) {
     void refreshHosts();
@@ -238,10 +249,7 @@ function showPage(next: Page): void {
 }
 
 function syncNav(): void {
-  topologyButton.classList.toggle("active", page === "topology");
-  manualButton.classList.toggle("active", page === "manual");
-  topologyButton.setAttribute("aria-current", page === "topology" ? "page" : "false");
-  manualButton.setAttribute("aria-current", page === "manual" ? "page" : "false");
+  manualButton.setAttribute("aria-pressed", page === "manual" && viewingHome() ? "true" : "false");
   syncRefreshButton();
 }
 
@@ -277,7 +285,7 @@ function present(key: string): void {
   }
   tabBar.render(strip);
   markActive();
-  syncRefreshButton();
+  syncNav();
 }
 
 function applyShortcut(action: ShortcutAction): void {
@@ -420,7 +428,9 @@ function paintTopology(): void {
     return;
   }
   const active = strip.tabs.find((item) => item.key === strip.activeKey);
+  diagramWidth = topologyRoot.clientWidth;
   renderTopology(topologyRoot, topologyView, {
+    width: diagramWidth,
     onConnect: (name, connectionName) => {
       void connectDevice(name, connectionName);
     },
@@ -511,7 +521,7 @@ function render(result: ListHostsResponse): void {
     selfName.textContent = `本机：${result.selfName}`;
     statusBar.append(selfName);
   }
-  if (!result.message && !result.selfName) {
+  if (!result.message) {
     const message = el("span", "status-text");
     message.textContent = result.status === "ok" ? "Tailscale 运行中" : "";
     statusBar.append(message);
@@ -633,14 +643,6 @@ function sourceLabel(source: HostEntry["source"]): string {
     case "tailscale+manual":
       return "Tailscale+手动";
   }
-}
-
-function navButton(label: string): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "button nav-button";
-  button.textContent = label;
-  return button;
 }
 
 function field(

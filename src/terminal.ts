@@ -18,6 +18,31 @@ import { WriteQueue } from "./write-queue.ts";
 /** Extra time after Exit before the process is reaped, so a late chunk can land. */
 const EXIT_REAP_DELAY_MS = 300;
 
+/** Matches the app theme tokens in styles.css (--term-bg, --text, --accent). */
+const TERMINAL_THEME = {
+  background: "#0b0e13",
+  foreground: "#d8dee9",
+  cursor: "#79a8ff",
+  cursorAccent: "#0b0e13",
+  selectionBackground: "rgba(79, 140, 255, 0.35)",
+  black: "#1b212a",
+  red: "#f06a6a",
+  green: "#3fb950",
+  yellow: "#d6a64a",
+  blue: "#4f8cff",
+  magenta: "#c678dd",
+  cyan: "#56c2d6",
+  white: "#d8dee9",
+  brightBlack: "#6e7a8a",
+  brightRed: "#ff8b8b",
+  brightGreen: "#5fd57a",
+  brightYellow: "#ecc56b",
+  brightBlue: "#79a8ff",
+  brightMagenta: "#d899ec",
+  brightCyan: "#7fd8e8",
+  brightWhite: "#ffffff",
+};
+
 type Phase = "connecting" | "live" | "ended" | "failed";
 
 type TabOrigin =
@@ -101,8 +126,12 @@ export function mountTerminal(
     view.hidden = true;
     stack.append(view);
     const term = new Terminal({
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+      fontFamily: '"SF Mono", Menlo, Monaco, "Cascadia Mono", Consolas, ui-monospace, monospace',
       fontSize: 14,
+      lineHeight: 1.15,
+      cursorBlink: true,
+      scrollback: 5000,
+      theme: TERMINAL_THEME,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
