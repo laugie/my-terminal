@@ -705,6 +705,34 @@ mod tests {
         }
     }
 
+    /// #35: a GUI launch has no TERM. ssh forwards the child's TERM to the
+    /// remote side, which turns colors off without it.
+    #[cfg(unix)]
+    #[test]
+    fn ssh_child_gets_a_color_terminal_type() {
+        let (tx, rx) = mpsc::channel();
+        let args = vec![
+            "-c".to_string(),
+            "printf 'T=%s C=%s\\n' \"$TERM\" \"$COLORTERM\"".to_string(),
+        ];
+        let session = pty::start_pty(std::path::Path::new("/bin/sh"), &args, move |event| {
+            tx.send(event).map_err(|_| ())
+        })
+        .expect("start_pty");
+        let mut output = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(SessionEvent::Data { bytes }) => output.extend(bytes),
+                Ok(SessionEvent::Exit { .. }) => break,
+                Err(_) => {}
+            }
+        }
+        let _ = session.shutdown();
+        let text = String::from_utf8_lossy(&output);
+        assert!(text.contains("T=xterm-256color C=truecolor"), "{text:?}");
+    }
+
     #[test]
     fn write_rejects_a_single_payload_over_64_kib() {
         let state = SessionState::new();
