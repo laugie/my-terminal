@@ -19,15 +19,25 @@ export function closeConfirmKey(key: string): "cancel" | null {
   return key === "Escape" ? "cancel" : null;
 }
 
+/** Wording for a confirmation other than ending one tab. */
+export interface ConfirmText {
+  message: string;
+  confirmLabel: string;
+  /** Start on Cancel, so a stray Enter keeps the app open. */
+  focusCancel?: boolean;
+}
+
 /** Markup for the in-app close confirmation. */
-export function renderCloseConfirm(tabTitle: string): string {
+export function renderCloseConfirm(tabTitle: string, text?: ConfirmText): string {
+  const message = escapeHtml(text?.message ?? CLOSE_CONFIRM_MESSAGE);
+  const confirmLabel = escapeHtml(text?.confirmLabel ?? "结束会话");
   return (
     `<div class="close-confirm" role="alertdialog" aria-modal="true" aria-labelledby="close-confirm-message">` +
     `<p class="close-confirm-title">${escapeHtml(tabTitle)}</p>` +
-    `<p class="close-confirm-message" id="close-confirm-message">${CLOSE_CONFIRM_MESSAGE}</p>` +
+    `<p class="close-confirm-message" id="close-confirm-message">${message}</p>` +
     `<div class="close-confirm-actions">` +
     `<button type="button" class="button" data-choice="cancel">取消</button>` +
-    `<button type="button" class="button primary" data-choice="confirm">结束会话</button>` +
+    `<button type="button" class="button primary" data-choice="confirm">${confirmLabel}</button>` +
     `</div>` +
     `</div>`
   );
@@ -37,11 +47,11 @@ export function renderCloseConfirm(tabTitle: string): string {
  * Ask in the page. `window.confirm` returns false without showing anything in
  * the macOS webview, so it cannot be used here.
  */
-export function askCloseConfirm(tabTitle: string): Promise<boolean> {
+export function askCloseConfirm(tabTitle: string, text?: ConfirmText): Promise<boolean> {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "close-confirm-overlay";
-    overlay.innerHTML = renderCloseConfirm(tabTitle);
+    overlay.innerHTML = renderCloseConfirm(tabTitle, text);
     const buttons = [...overlay.querySelectorAll<HTMLButtonElement>("[data-choice]")];
 
     const finish = (confirmed: boolean) => {
@@ -81,7 +91,7 @@ export function askCloseConfirm(tabTitle: string): Promise<boolean> {
     open = true;
     document.addEventListener("keydown", onKey, true);
     document.body.append(overlay);
-    buttons[buttons.length - 1]?.focus();
+    buttons[text?.focusCancel ? 0 : buttons.length - 1]?.focus();
   });
 }
 

@@ -41,6 +41,7 @@ import {
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { bindDeviceActivation } from "./diagram.ts";
+import { placeLabels, type LabelBox, type LabelSlot } from "./label-layout.ts";
 import {
   buildPlanets,
   cameraDistance,
@@ -73,6 +74,19 @@ interface PlanetParts {
   halo: Sprite | null;
   selection: Mesh;
   label: HTMLElement;
+}
+
+/**
+ * A label that the screen layout moves around its anchor. The CSS2D object
+ * pins a zero-size anchor to the 3D point; the label is offset inside it.
+ */
+interface FloatingLabel {
+  id: string;
+  anchor: Object3D;
+  label: HTMLElement;
+  /** World radius of what the label belongs to; 0 for an orbit name. */
+  radius: number;
+  mesh: Mesh | null;
 }
 
 export function mountPlanetView(
@@ -138,6 +152,8 @@ export function mountPlanetView(
   let current: TopologyView | null = null;
   let content = new Group();
   let parts: PlanetParts[] = [];
+  let floatingLabels: FloatingLabel[] = [];
+  const previousSlots = new Map<string, LabelSlot>();
   let ownedByContent: Array<{ dispose(): void }> = [];
   scene.add(content);
   let framed = false;
@@ -147,6 +163,8 @@ export function mountPlanetView(
     removeContent();
     content = new Group();
     parts = [];
+    floatingLabels = [];
+    previousSlots.clear();
     ownedByContent = [];
     const model = buildPlanets(next);
     latest = model;
@@ -182,7 +200,8 @@ export function mountPlanetView(
   }
 
   function frame(model: PlanetModel): void {
-    const direction = { x: 0, y: 0.5, z: 1 };
+    // A little above the orbits, so their planets spread out vertically too.
+    const direction = { x: 0, y: 0.75, z: 1 };
     const distance = cameraDistance(model, FOV, camera.aspect || 1, direction);
     camera.position.set(direction.x, direction.y, direction.z).normalize().multiplyScalar(distance);
     controls.target.set(0, 0, 0);
@@ -206,10 +225,11 @@ export function mountPlanetView(
       tag.className = "planet-region";
       tag.textContent = ring.region;
       tag.style.color = ring.color;
-      const label = new CSS2DObject(tag);
+      const anchor = floating(tag);
       const at = ringPoint(ring, Math.PI * 1.5 + 0.35);
-      label.position.set(at.x, at.y, at.z);
-      content.add(label);
+      anchor.position.set(at.x, at.y, at.z);
+      content.add(anchor);
+      floatingLabels.push({ id: `region:${ring.region}`, anchor, label: tag, radius: 0, mesh: null });
     }
   }
 
@@ -280,10 +300,9 @@ export function mountPlanetView(
     group.add(selection);
 
     const label = planetLabel(planet);
-    const tag = new CSS2DObject(label);
-    tag.center.set(0.5, 0);
-    tag.position.set(0, -planet.radius * 1.25, 0);
-    group.add(tag);
+    const anchor = floating(label);
+    group.add(anchor);
+    floatingLabels.push({ id: `planet:${planet.name}`, anchor, label, radius: planet.radius, mesh });
     bindDeviceActivation(label, planet.name, (name) => {
       options.onActivate(name);
     });
@@ -465,9 +484,62 @@ export function mountPlanetView(
       const behind = worldPosition.distanceTo(toCamera) > toCamera.length();
       part.label.classList.toggle("planet-far", behind);
     }
+    layoutLabels();
     renderer.render(scene, camera);
     labels.render(scene, camera);
     frameHandle = window.requestAnimationFrame(tick);
+  }
+
+  const projected = new Vector3();
+  const anchorPosition = new Vector3();
+
+  /**
+   * Place every label on screen so labels do not cover each other or other
+   * planets. Reads all sizes first, then writes all offsets.
+   */
+  function layoutLabels(): void {
+    if (width === 0 || height === 0) {
+      return;
+    }
+    const halfHeight = height / 2;
+    const focal = halfHeight / Math.tan((FOV * Math.PI) / 360);
+    const boxes: LabelBox[] = [];
+    const centres = new Map<string, { x: number; y: number }>();
+    for (const item of floatingLabels) {
+      item.anchor.getWorldPosition(anchorPosition);
+      projected.copy(anchorPosition).project(camera);
+      if (projected.z < -1 || projected.z > 1) {
+        continue;
+      }
+      const x = ((projected.x + 1) / 2) * width;
+      const y = ((1 - projected.y) / 2) * height;
+      const depth = anchorPosition.distanceTo(camera.position);
+      const scale = item.mesh ? item.mesh.scale.x : 1;
+      const r = depth > 0 ? (item.radius * scale * focal) / depth : 0;
+      // Orbit names go first so planet labels move around them.
+      boxes.push({
+        id: item.id,
+        x,
+        y,
+        r,
+        w: item.label.offsetWidth,
+        h: item.label.offsetHeight,
+        depth: item.mesh ? depth : -1,
+      });
+      centres.set(item.id, { x, y });
+    }
+    const placed = placeLabels(boxes, { width, height, previous: previousSlots });
+    for (const item of floatingLabels) {
+      const placement = placed.get(item.id);
+      const centre = centres.get(item.id);
+      if (!placement || !centre) {
+        continue;
+      }
+      previousSlots.set(item.id, placement.slot);
+      const dx = Math.round(placement.left - centre.x);
+      const dy = Math.round(placement.top - centre.y);
+      item.label.style.transform = `translate(${dx}px, ${dy}px)`;
+    }
   }
 
   resize();
@@ -498,6 +570,14 @@ export function mountPlanetView(
       stage.remove();
     },
   };
+}
+
+/** Zero-size anchor at a 3D point; the label inside is moved by the layout. */
+function floating(label: HTMLElement): CSS2DObject {
+  const anchor = document.createElement("div");
+  anchor.className = "planet-anchor";
+  anchor.append(label);
+  return new CSS2DObject(anchor);
 }
 
 function planetLabel(planet: Planet): HTMLElement {

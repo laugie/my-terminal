@@ -22,6 +22,8 @@
     "allow-ui-zoom-set",
     "allow-appearance-load",
     "allow-appearance-set",
-    "allow-remote-shell-run"
+    "allow-remote-shell-run",
+    "allow-close-prompt-shown",
+    "allow-quit-confirmed"
   ]
 }
