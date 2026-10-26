@@ -39,6 +39,9 @@ type Page = "topology" | "manual";
 const manualButton = toolButton("servers", "手动服务器");
 manualButton.setAttribute("aria-pressed", "false");
 const refreshButton = toolButton("reload", "重新加载");
+const planetButton = toolButton("planet", "3D 视图");
+planetButton.setAttribute("aria-pressed", "true");
+planetButton.title = "在 3D 星球和平面图之间切换";
 
 const statusBar = el("div", "status");
 statusBar.setAttribute("role", "status");
@@ -181,7 +184,7 @@ const settingsSlot = el("div", "settings-slot");
 const settingsButton = toolButton("gear", "设置", { iconOnly: true });
 settingsButton.setAttribute("aria-expanded", "false");
 settingsSlot.append(settingsButton);
-tabBar.end.append(manualButton, refreshButton, el("span", "toolbar-divider"), settingsSlot);
+tabBar.end.append(planetButton, manualButton, refreshButton, el("span", "toolbar-divider"), settingsSlot);
 let zoomedTo = 100;
 const zoom = new ZoomController({
   save: (percent) => saveUiZoom(percent),
@@ -194,10 +197,16 @@ const zoom = new ZoomController({
   },
 });
 let appearanceRequest = 0;
+let paintedMode = "3d";
 const appearance: AppearanceController = new AppearanceController({
   save: (change) => saveAppearance(change),
   onChange: () => {
     settings.renderAppearance();
+    planetButton.setAttribute("aria-pressed", appearance.topologyMode === "3d" ? "true" : "false");
+    if (appearance.topologyMode !== paintedMode) {
+      paintedMode = appearance.topologyMode;
+      paintTopology();
+    }
     const theme = themeOf(appearance.theme);
     const font = fontOf(appearance.font);
     const request = ++appearanceRequest;
@@ -271,6 +280,12 @@ new ResizeObserver(() => {
   });
 }).observe(topologyRoot);
 
+planetButton.addEventListener("click", () => {
+  void appearance.set({ topologyMode: appearance.topologyMode === "3d" ? "2d" : "3d" });
+  if (page !== "topology" || !viewingHome()) {
+    showPage("topology");
+  }
+});
 manualButton.addEventListener("click", () => {
   if (page === "manual" && viewingHome()) {
     showPage("topology");
@@ -538,6 +553,7 @@ function paintTopology(): void {
     },
     activeName: active?.track === "device" ? active.deviceName ?? null : null,
     canOpen: strip.canOpen(),
+    mode: appearance.topologyMode,
   });
 }
 

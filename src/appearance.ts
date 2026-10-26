@@ -324,6 +324,8 @@ export interface AppearanceView {
   font: string;
   /** Beautify the remote shell after a connection. Missing means on. */
   autoBeautify?: boolean;
+  /** Missing means 3D. */
+  topologyMode?: string;
   readOnly: boolean;
   message?: string | null;
 }
@@ -332,7 +334,12 @@ export interface AppearanceChange {
   theme?: string;
   font?: string;
   autoBeautify?: boolean;
+  topologyMode?: TopologyMode;
 }
+
+/** Same as the backend `TOPOLOGY_MODES`; the first is the default. */
+export const TOPOLOGY_MODES = ["3d", "2d"] as const;
+export type TopologyMode = (typeof TOPOLOGY_MODES)[number];
 
 /**
  * The current theme, font and auto-beautify switch for the terminal and the
@@ -344,6 +351,7 @@ export class AppearanceController {
   theme = DEFAULT_THEME;
   font = DEFAULT_FONT;
   autoBeautify = true;
+  topologyMode: TopologyMode = "3d";
   readOnly = false;
   message = "";
   private chain: Promise<void> = Promise.resolve();
@@ -359,6 +367,7 @@ export class AppearanceController {
     this.theme = themeOf(view.theme).id;
     this.font = fontOf(view.font).id;
     this.autoBeautify = view.autoBeautify !== false;
+    this.topologyMode = view.topologyMode === "2d" ? "2d" : "3d";
     this.readOnly = view.readOnly;
     this.message = view.message ?? "";
     this.deps.onChange?.();
@@ -375,12 +384,20 @@ export class AppearanceController {
     if (change.autoBeautify !== undefined && change.autoBeautify !== this.autoBeautify) {
       next.autoBeautify = change.autoBeautify;
     }
-    if (next.theme === undefined && next.font === undefined && next.autoBeautify === undefined) {
+    if (
+      change.topologyMode !== undefined &&
+      TOPOLOGY_MODES.includes(change.topologyMode) &&
+      change.topologyMode !== this.topologyMode
+    ) {
+      next.topologyMode = change.topologyMode;
+    }
+    if (Object.keys(next).length === 0) {
       return this.chain;
     }
     this.theme = next.theme ?? this.theme;
     this.font = next.font ?? this.font;
     this.autoBeautify = next.autoBeautify ?? this.autoBeautify;
+    this.topologyMode = next.topologyMode ?? this.topologyMode;
     this.deps.onChange?.();
     this.chain = this.chain.then(async () => {
       try {

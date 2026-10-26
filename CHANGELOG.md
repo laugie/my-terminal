@@ -12,6 +12,7 @@
 - macOS 从 Finder 启动时，Tailscale 状态不再因 App 包内二进制进入 GUI 模式而解析失败。查找 CLI 时在 PATH 之后检查 `/usr/local/bin`、`/opt/homebrew/bin` 和 App 包内路径；调用时直接 spawn 并设置 `TERM=dumb`。状态 JSON 容忍 null 与单个坏节点，失败原因显示在主机列表上方。
 
 ### Added
+- 拓扑 3D 星球视图（#35）：首页默认显示 3D 视图。每个区域一条倾斜轨道，每台设备一颗星球，颜色按类别区分。在线状态用星球光晕和名字前的圆点表示，跳板画成弧线。拖动旋转、滚轮缩放、双击复位；点击星球或名字连接，键盘可用 Tab / Enter。工具栏按钮切换回平面图，选择写入 `settings.topologyMode`。three.js 按需加载；不支持 WebGL 时改用平面图。
 - 远端 Shell 美化（#35）：默认开启，可在设置里关闭。标签第一次连上主机后，应用在后台走同一路线、用 `BatchMode=yes` 执行固定脚本，每台主机每次启动应用只执行一次。改动前先把 `~/.bashrc` / `~/.zshrc` 备份到 `~/.my-terminal/backups`，再追加带标记的段落，加载 `ls` / `LS_COLORS` 颜色、彩色提示符，zsh 上加语法高亮（没有安装时下载固定版本）。只在交互式 shell 生效；已有彩色提示符或提示符框架时不覆盖。设置里可以对当前标签的主机「立即美化」或「恢复备份」：rc 文件没改过时逐字节恢复，改过时只删除 my-terminal 段落；恢复后这台主机不再自动美化。
 - 终端配色与字体（#35）：启动 ssh 时设置 `TERM=xterm-256color`、`COLORTERM=truecolor`，从图形界面启动时远端 `ls --color` 和彩色提示符也能显示颜色。新增 8 套配色（默认「夜幕」，另有深海、One Dark、Dracula、Tokyo Night、Nord、Solarized Dark 和浅色「纸白」），设置里选择并预览色块，立即作用到所有标签。内置 JetBrains Mono（SIL OFL 1.1）作为默认终端字体，也可以选系统等宽字体，未安装的不可选。选择写入 `settings.terminalTheme` / `settings.terminalFont`，默认值不写，未知值按默认处理。
 - 界面缩放（#33）：界面和终端字体一起缩放，档位 50%–200%。macOS 用 Cmd+= / Cmd+- / Cmd+0，Windows 用 Ctrl+= / Ctrl+- / Ctrl+0，也支持 Shift 写法和小键盘；在终端和输入框里都由应用处理，不发给远端。Windows 上裸 Ctrl+- 不再发给 shell。设置里新增「界面缩放」：−、百分比、+、重置。比例写入 `config.json` 的 `settings.uiZoom`，重启后保持；100% 不写，非法值按 100% 处理，不当作配置损坏。每次缩放后当前终端重新计算行列并通知远端。

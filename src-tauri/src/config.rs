@@ -102,6 +102,9 @@ pub const TERMINAL_THEMES: [&str; 8] = [
     "paper",
 ];
 
+/// Topology views: 3D planets (default, not written) or the flat diagram.
+pub const TOPOLOGY_MODES: [&str; 2] = ["3d", "2d"];
+
 /// Terminal fonts. The frontend `FONTS` uses the same ids; the first is the
 /// bundled default and is not written.
 pub const TERMINAL_FONTS: [&str; 8] = [
@@ -151,6 +154,13 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     pub auto_beautify: Option<bool>,
+    /// One of [`TOPOLOGY_MODES`]. None is 3D and is not written.
+    #[serde(
+        default,
+        deserialize_with = "lenient_topology_mode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub topology_mode: Option<String>,
 }
 
 /// A value off the zoom ladder is read as 100%. It must not fail the whole
@@ -179,6 +189,13 @@ where
     D: serde::Deserializer<'de>,
 {
     lenient_choice(deserializer, &TERMINAL_FONTS)
+}
+
+fn lenient_topology_mode<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    lenient_choice(deserializer, &TOPOLOGY_MODES)
 }
 
 /// Only a JSON `false` turns a default-on switch off; anything else is on.
@@ -494,6 +511,7 @@ pub struct AppearanceView {
     pub theme: String,
     pub font: String,
     pub auto_beautify: bool,
+    pub topology_mode: String,
     pub read_only: bool,
     pub message: Option<String>,
 }
@@ -616,6 +634,10 @@ impl JsonHostStore {
                 .clone()
                 .unwrap_or_else(|| TERMINAL_FONTS[0].to_string()),
             auto_beautify: settings.auto_beautify != Some(false),
+            topology_mode: settings
+                .topology_mode
+                .clone()
+                .unwrap_or_else(|| TOPOLOGY_MODES[0].to_string()),
             read_only: self.config.read_only,
             message: if self.config.read_only {
                 self.config.write_error.clone()
@@ -643,6 +665,20 @@ impl JsonHostStore {
         if let Some(id) = font {
             next.settings.terminal_font = (id != TERMINAL_FONTS[0]).then(|| id.to_string());
         }
+        next.version = CONFIG_VERSION;
+        self.persist(&next)?;
+        self.config = next;
+        Ok(())
+    }
+
+    /// 3D is the default and removes the field.
+    pub fn set_topology_mode(&mut self, mode: &str) -> Result<(), String> {
+        if !TOPOLOGY_MODES.contains(&mode) {
+            return Err("拓扑视图无效".to_string());
+        }
+        self.ensure_writable()?;
+        let mut next = self.config.clone();
+        next.settings.topology_mode = (mode != TOPOLOGY_MODES[0]).then(|| mode.to_string());
         next.version = CONFIG_VERSION;
         self.persist(&next)?;
         self.config = next;

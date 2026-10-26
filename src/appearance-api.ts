@@ -11,6 +11,7 @@ export function saveAppearance(change: AppearanceChange): Promise<AppearanceView
     theme: change.theme ?? null,
     font: change.font ?? null,
     autoBeautify: change.autoBeautify ?? null,
+    topologyMode: change.topologyMode ?? null,
   });
 }
 

@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   KIND_COLORS,
   buildPlanets,
+  cameraBasis,
   cameraDistance,
   linkCurve,
   presenceColor,
@@ -111,12 +112,25 @@ test("device kinds have distinct planet colors", () => {
   assert.equal(new Set(colors).size, colors.length);
 });
 
-test("the camera starts far enough back to show every orbit", () => {
+test("the camera starts where every orbit and planet is in view, without wasting space", () => {
   const model = buildPlanets(VIEW);
+  const direction = { x: 0, y: 0.5, z: 1 };
+  const basis = cameraBasis(direction);
+  const tanV = Math.tan((45 * Math.PI) / 360);
   for (const aspect of [0.6, 1, 2.2]) {
-    const distance = cameraDistance(model.extent, 45, aspect);
-    const halfHeight = Math.tan((45 * Math.PI) / 360) * (distance - model.extent);
-    assert.ok(halfHeight * Math.min(1, aspect) >= model.extent, `aspect ${aspect}`);
+    const distance = cameraDistance(model, 45, aspect, direction);
+    let widest = 0;
+    for (const ring of model.rings) {
+      for (let i = 0; i < 72; i += 1) {
+        const p = ringPoint(ring, (i / 72) * Math.PI * 2);
+        const depth = distance - (p.x * basis.forward.x + p.y * basis.forward.y + p.z * basis.forward.z);
+        const x = Math.abs(p.x * basis.right.x + p.y * basis.right.y + p.z * basis.right.z) / (depth * tanV * aspect);
+        const y = Math.abs(p.x * basis.up.x + p.y * basis.up.y + p.z * basis.up.z) / (depth * tanV);
+        assert.ok(x <= 1 && y <= 1, `aspect ${aspect}: 轨道点在画面内`);
+        widest = Math.max(widest, x, y);
+      }
+    }
+    assert.ok(widest > 0.55, `aspect ${aspect}: 轨道至少占画面一半 (${widest.toFixed(2)})`);
   }
   assert.ok(model.extent >= Math.max(...model.rings.map((ring) => ring.radius)));
 });

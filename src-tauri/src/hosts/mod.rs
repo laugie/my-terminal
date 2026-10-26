@@ -172,6 +172,10 @@ impl HostState {
         self.with_store(|store| store.set_appearance(theme, font))?
     }
 
+    pub fn set_topology_mode(&self, mode: &str) -> Result<(), String> {
+        self.with_store(|store| store.set_topology_mode(mode))?
+    }
+
     pub fn set_auto_beautify(&self, enabled: bool) -> Result<(), String> {
         self.with_store(|store| store.set_auto_beautify(enabled))?
     }
