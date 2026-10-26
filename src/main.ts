@@ -17,6 +17,8 @@ import { authSettings, authStatus, type AuthStateName } from "./auth.ts";
 import { mountLogin } from "./login.ts";
 import { mountSettings } from "./settings.ts";
 import { startupRoute } from "./startup.ts";
+import { ZoomController } from "./zoom.ts";
+import { loadUiZoom, saveUiZoom } from "./zoom-api.ts";
 
 const appElement = document.querySelector("#app");
 if (!(appElement instanceof HTMLElement)) {
@@ -136,6 +138,10 @@ const terminal = mountTerminal(terminalPanel, {
     strip.onFailed(key, message);
   },
   onShortcut: (action) => {
+    if (action.type === "zoom") {
+      void zoom.step(action.step);
+      return;
+    }
     if (!closeConfirmOpen()) {
       applyShortcut(action);
     }
@@ -159,7 +165,25 @@ const settingsButton = toolButton("gear", "设置", { iconOnly: true });
 settingsButton.setAttribute("aria-expanded", "false");
 settingsSlot.append(settingsButton);
 tabBar.end.append(manualButton, refreshButton, el("span", "toolbar-divider"), settingsSlot);
-mountSettings(settingsButton);
+let zoomedTo = 100;
+const zoom = new ZoomController({
+  save: (percent) => saveUiZoom(percent),
+  onChange: () => {
+    if (zoom.percent !== zoomedTo) {
+      zoomedTo = zoom.percent;
+      terminal.refit();
+    }
+    settings.renderZoom();
+  },
+});
+const settings = mountSettings(settingsButton, zoom);
+void loadUiZoom()
+  .then((view) => {
+    zoom.load(view);
+  })
+  .catch(() => {
+    // Keep 100%. The settings row shows the level actually in use.
+  });
 
 let page: Page = "topology";
 let signedIn = false;
@@ -298,6 +322,10 @@ function present(key: string): void {
 function applyShortcut(action: ShortcutAction): void {
   if (action.type === "close") {
     void requestClose(strip.activeKey);
+    return;
+  }
+  if (action.type === "zoom") {
+    void zoom.step(action.step);
     return;
   }
   strip.jump(action.index);

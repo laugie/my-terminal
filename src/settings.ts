@@ -2,12 +2,20 @@ import { authSetLock, authSettings, authSetup, type LockSettings } from "./auth.
 import { errorText } from "./hosts.ts";
 import { mountCredentialPrompt } from "./login.ts";
 import { planLockChange } from "./startup.ts";
+import { toolButton } from "./tab-bar.ts";
+import { shortcutPlatform } from "./terminal.ts";
+import { zoomLabel, type ZoomController } from "./zoom.ts";
+
+export interface SettingsPanel {
+  /** Show the current zoom level and which steps are possible. */
+  renderZoom(): void;
+}
 
 /**
- * Gear button dialog with one switch: require login on the next launch.
- * The button itself is created by the shell so the top bar owns the slot.
+ * Gear button dialog: UI zoom, and a switch that requires login on the next
+ * launch. The button itself is created by the shell so the top bar owns the slot.
  */
-export function mountSettings(button: HTMLButtonElement): void {
+export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): SettingsPanel {
   const slot = button.parentElement;
   if (!(slot instanceof HTMLElement)) {
     throw new Error("missing settings slot");
@@ -50,8 +58,60 @@ export function mountSettings(button: HTMLButtonElement): void {
   closeButton.className = "button";
   closeButton.textContent = "关闭";
 
-  dialog.append(title, row, notice, hint, dialogError, promptHost, closeButton);
+  const zoomRow = document.createElement("div");
+  zoomRow.className = "settings-zoom";
+  zoomRow.setAttribute("role", "group");
+  const zoomCaption = document.createElement("span");
+  zoomCaption.id = "settings-zoom-caption";
+  zoomCaption.textContent = "界面缩放";
+  zoomRow.setAttribute("aria-labelledby", zoomCaption.id);
+  const zoomOut = toolButton("minus", "缩小", { iconOnly: true });
+  const zoomValue = document.createElement("output");
+  zoomValue.className = "settings-zoom-value";
+  zoomValue.setAttribute("aria-live", "polite");
+  const zoomIn = toolButton("plus", "放大", { iconOnly: true });
+  const zoomReset = document.createElement("button");
+  zoomReset.type = "button";
+  zoomReset.className = "button";
+  zoomReset.textContent = "重置";
+  const zoomControls = document.createElement("div");
+  zoomControls.className = "settings-zoom-controls";
+  zoomControls.append(zoomOut, zoomValue, zoomIn, zoomReset);
+  zoomRow.append(zoomCaption, zoomControls);
+  const mod = shortcutPlatform() === "mac" ? "⌘" : "Ctrl+";
+  const zoomHint = document.createElement("p");
+  zoomHint.className = "login-hint";
+  zoomHint.textContent = `快捷键：${mod}= 放大，${mod}- 缩小，${mod}0 恢复 100%`;
+  const zoomNotice = document.createElement("p");
+  zoomNotice.className = "settings-notice";
+  zoomOut.addEventListener("click", () => {
+    void zoom.step("out");
+  });
+  zoomIn.addEventListener("click", () => {
+    void zoom.step("in");
+  });
+  zoomReset.addEventListener("click", () => {
+    void zoom.step("reset");
+  });
+
+  const divider = document.createElement("hr");
+  divider.className = "settings-divider";
+
+  dialog.append(
+    title,
+    zoomRow,
+    zoomHint,
+    zoomNotice,
+    divider,
+    row,
+    notice,
+    hint,
+    dialogError,
+    promptHost,
+    closeButton,
+  );
   slot.append(dialog);
+  renderZoom();
 
   let savedEnabled = false;
   let hasSecret = false;
@@ -178,4 +238,14 @@ export function mountSettings(button: HTMLButtonElement): void {
       checkbox.disabled = readOnly || busy;
     }
   }
+
+  function renderZoom(): void {
+    zoomValue.textContent = zoomLabel(zoom.percent);
+    zoomOut.disabled = !zoom.canStep("out");
+    zoomIn.disabled = !zoom.canStep("in");
+    zoomReset.disabled = !zoom.canStep("reset");
+    zoomNotice.textContent = zoom.message;
+  }
+
+  return { renderZoom };
 }

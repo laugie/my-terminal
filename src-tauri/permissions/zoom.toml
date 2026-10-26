@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-ui-zoom-load"
+description = "Enables the ui_zoom_load command without any pre-configured scope."
+commands.allow = ["ui_zoom_load"]
+
+[[permission]]
+identifier = "allow-ui-zoom-set"
+description = "Enables the ui_zoom_set command without any pre-configured scope."
+commands.allow = ["ui_zoom_set"]

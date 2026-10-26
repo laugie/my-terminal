@@ -671,6 +671,32 @@ body {
   gap: 8px;
 }
 
+.settings-zoom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-zoom-value {
+  min-width: 3.5em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-divider {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
 .settings-prompt {
   margin-top: 12px;
 }
