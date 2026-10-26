@@ -1116,6 +1116,20 @@ body {
   pointer-events: none;
 }
 
+/* Zero-size point pinned to the planet; the layout offsets the label inside. */
+.planet-anchor {
+  width: 0;
+  height: 0;
+}
+
+.planet-anchor > .planet-label,
+.planet-anchor > .planet-region {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, 18px);
+}
+
 .planet-label {
   display: flex;
   flex-direction: column;
@@ -1173,9 +1187,18 @@ body {
   font-weight: 500;
 }
 
+/* The address shows on hover, keyboard focus and for the active tab, so the
+   resting labels stay small enough to keep apart. */
 .planet-address {
+  display: none;
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.planet-label.planet-hover .planet-address,
+.planet-label.device-active .planet-address,
+.planet-label:focus-visible .planet-address {
+  display: block;
 }
 
 .planet-presence {

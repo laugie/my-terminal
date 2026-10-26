@@ -2,6 +2,7 @@ pub mod appearance;
 pub mod auth;
 pub mod config;
 pub mod hosts;
+pub mod quit;
 pub mod remote_shell;
 pub mod session;
 pub mod topology;
@@ -11,7 +12,22 @@ pub mod zoom;
 pub fn run() {
     use tauri::Manager;
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(quit::app_menu);
+    builder
+        .on_menu_event(|app, event| {
+            if event.id() == quit::QUIT_MENU_ID && quit::request_close(app) {
+                app.exit(0);
+            }
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if !quit::request_close(window.app_handle()) {
+                    api.prevent_close();
+                }
+            }
+        })
         .setup(|app| {
             let dir = config::resolve_app_config_dir(app.handle())?;
             let hosts = hosts::HostState::open(&dir);
@@ -32,6 +48,7 @@ pub fn run() {
             app.manage(hosts);
             app.manage(session::SessionState::new());
             app.manage(auth);
+            app.manage(quit::QuitState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -53,6 +70,8 @@ pub fn run() {
             appearance::appearance_load,
             appearance::appearance_set,
             remote_shell::remote_shell_run,
+            quit::close_prompt_shown,
+            quit::quit_confirmed,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -140,3 +140,82 @@ test("an empty view has no planets", () => {
   assert.equal(model.planets.length, 0);
   assert.equal(model.rings.length, 0);
 });
+
+// #37：打开时星球挤在中间、名字互相遮挡。轨道拉开、同轨道间隔加大、相邻轨道错开，按类型定大小。
+
+const ORBIT_GAP = 12;
+
+test("#37 orbits start farther out and sit farther apart", () => {
+  const model = buildPlanets(VIEW);
+  assert.ok(model.rings[0]!.radius >= 16, `第一条轨道 ${model.rings[0]!.radius}`);
+  for (let i = 1; i < model.rings.length; i += 1) {
+    const gap = model.rings[i]!.radius - model.rings[i - 1]!.radius;
+    assert.ok(gap >= ORBIT_GAP, `轨道间距 ${gap}`);
+  }
+});
+
+test("#37 planets on one orbit are evenly spread and well apart", () => {
+  const crowded = {
+    ...VIEW,
+    regions: [{ name: "机房", devices: Array.from({ length: 24 }, (_, i) => dev(`srv-${i}`)) }, ...VIEW.regions],
+  } as unknown as TopologyView;
+  for (const view of [VIEW, crowded]) {
+    const model = buildPlanets(view);
+    for (const ring of model.rings) {
+      const members = model.planets.filter((planet) => planet.region === ring.region);
+      if (members.length < 2) {
+        continue;
+      }
+      const chord = 2 * ring.radius * Math.sin(Math.PI / members.length);
+      for (const planet of members) {
+        const nearest = Math.min(
+          ...members.filter((other) => other !== planet).map((other) => dist(planet.position, other.position)),
+        );
+        assert.ok(Math.abs(nearest - chord) < 1e-6, `${planet.name} 等距`);
+        assert.ok(nearest >= 10, `${ring.region} 相邻星球间距 ${nearest.toFixed(1)}`);
+      }
+    }
+  }
+});
+
+test("#37 neighbouring orbits are staggered, not lined up", () => {
+  const model = buildPlanets(VIEW);
+  for (const planet of model.planets) {
+    const others = model.planets.filter((other) => other.region !== planet.region);
+    const nearest = Math.min(...others.map((other) => dist(planet.position, other.position)));
+    assert.ok(nearest >= ORBIT_GAP * 1.2, `${planet.name} 与其他轨道最近 ${nearest.toFixed(1)}`);
+  }
+});
+
+test("#37 planet size follows the device type", () => {
+  const sized = {
+    ...VIEW,
+    regions: [
+      {
+        name: "全部",
+        devices: [
+          dev("vps-a", { type: "cloud" }),
+          dev("gw", { type: "router" }),
+          dev("app", { type: "server" }),
+          dev("nas", { type: "nas" }),
+          dev("mac", { type: "mac" }),
+          dev("win", { type: "windows" }),
+          dev("thing"),
+          dev("phone", { mobile: true }),
+          dev("laptop", { type: "mac", mobile: true }),
+        ],
+      },
+    ],
+  } as unknown as TopologyView;
+  const size = new Map(buildPlanets(sized).planets.map((planet) => [planet.name, planet.radius]));
+  const at = (name: string) => size.get(name)!;
+  for (const name of ["gw", "app", "nas", "mac", "win", "thing", "phone", "laptop"]) {
+    assert.ok(at("vps-a") > at(name), `云主机大于 ${name}`);
+  }
+  for (const name of ["app", "nas", "mac", "win", "thing", "phone", "laptop"]) {
+    assert.ok(at("gw") > at(name), `路由器大于 ${name}`);
+  }
+  for (const name of ["app", "nas", "mac", "win", "thing"]) {
+    assert.ok(at(name) > at("phone") && at(name) > at("laptop"), `移动设备小于 ${name}`);
+  }
+});

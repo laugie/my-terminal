@@ -59,23 +59,30 @@ export const KIND_COLORS: Readonly<Record<DeviceKind, string>> = {
   generic: "#8fa3b8",
 };
 
+/**
+ * Planet radius by device type: cloud hosts are logged into most, routers
+ * are the usual jump hosts, mobile devices are rarely used.
+ */
 const KIND_SIZES: Readonly<Record<DeviceKind, number>> = {
-  server: 1.75,
-  cloud: 1.95,
-  nas: 1.6,
-  router: 1.35,
-  mac: 1.45,
-  windows: 1.45,
-  generic: 1.4,
+  cloud: 2.6,
+  router: 2.1,
+  server: 1.8,
+  nas: 1.75,
+  mac: 1.55,
+  windows: 1.55,
+  generic: 1.5,
 };
+const MOBILE_SIZE = 1.05;
 
 const RING_COLORS = ["#79a8ff", "#56c2d6", "#c99cf0", "#e6c07b", "#8fd18a", "#f2777a"];
 
 /** Innermost orbit, gap between orbits, and arc length per planet on an orbit. */
-const FIRST_RADIUS = 10;
-const RING_GAP = 8;
-const SPACING = 7;
+const FIRST_RADIUS = 16;
+const RING_GAP = 12;
+const SPACING = 11;
 const MAX_TILT = 0.45;
+/** Phases tried per orbit when staggering it against the inner ones. */
+const PHASE_STEPS = 24;
 
 export function buildPlanets(view: TopologyView): PlanetModel {
   const rings: Ring[] = [];
@@ -99,7 +106,7 @@ export function buildPlanets(view: TopologyView): PlanetModel {
       color: RING_COLORS[index % RING_COLORS.length] ?? "#79a8ff",
     };
     rings.push(ring);
-    const phase = index * 0.7;
+    const phase = staggerPhase(ring, count, planets);
     region.devices.forEach((device, deviceIndex) => {
       const kind = deviceKind({ name: device.name, type: device.type });
       planets.push({
@@ -111,7 +118,7 @@ export function buildPlanets(view: TopologyView): PlanetModel {
         mobile: device.mobile,
         presence: device.presence,
         position: ringPoint(ring, phase + (2 * Math.PI * deviceIndex) / count),
-        radius: KIND_SIZES[kind],
+        radius: device.mobile ? MOBILE_SIZE : KIND_SIZES[kind],
         color: KIND_COLORS[kind],
         seed: hashSeed(device.name),
       });
@@ -134,6 +141,37 @@ export function buildPlanets(view: TopologyView): PlanetModel {
 
   const outer = rings.reduce((max, ring) => Math.max(max, ring.radius), 0);
   return { rings, planets, links, extent: outer + 2 * Math.max(...Object.values(KIND_SIZES)) };
+}
+
+/**
+ * Turn an orbit so its planets sit as far as possible from those already
+ * placed, instead of lining up with them along a radius.
+ */
+function staggerPhase(ring: Ring, count: number, placed: readonly Planet[]): number {
+  if (placed.length === 0) {
+    return 0;
+  }
+  const step = (2 * Math.PI) / count;
+  let best = 0;
+  let bestDistance = -1;
+  for (let i = 0; i < PHASE_STEPS; i += 1) {
+    const phase = (step * i) / PHASE_STEPS;
+    let nearest = Infinity;
+    for (let k = 0; k < count; k += 1) {
+      const point = ringPoint(ring, phase + step * k);
+      for (const other of placed) {
+        nearest = Math.min(
+          nearest,
+          Math.hypot(point.x - other.position.x, point.y - other.position.y, point.z - other.position.z),
+        );
+      }
+    }
+    if (nearest > bestDistance + 1e-9) {
+      best = phase;
+      bestDistance = nearest;
+    }
+  }
+  return best;
 }
 
 /** Point at `angle` on a tilted, turned circle around the origin. */

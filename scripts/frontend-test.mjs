@@ -44,6 +44,8 @@ try {
     path.join(outDir, "appearance.test.js"),
     path.join(outDir, "remote-shell.test.js"),
     path.join(outDir, "planets.test.js"),
+    path.join(outDir, "label-layout.test.js"),
+    path.join(outDir, "quit-confirm.test.js"),
   ]);
 } finally {
   await rm(outDir, { recursive: true, force: true });

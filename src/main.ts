@@ -17,6 +17,8 @@ import { mountTabBar, toolButton, type TabBar } from "./tab-bar.ts";
 import { closeSession, sshTargetOf } from "./session.ts";
 import { AutoBeautify, reportMessage, type ShellTarget } from "./remote-shell.ts";
 import { runRemoteShell } from "./remote-shell-api.ts";
+import { QuitPrompt } from "./quit-confirm.ts";
+import { closePromptShown, onCloseRequested, quitConfirmed } from "./quit-api.ts";
 import { askCloseConfirm, closeConfirmOpen, needsCloseConfirm } from "./close-confirm.ts";
 import { sessionLimitMessage, TabStrip, type ShortcutAction } from "./tabs.ts";
 import { authSettings, authStatus, type AuthStateName } from "./auth.ts";
@@ -314,6 +316,20 @@ refreshButton.addEventListener("click", () => {
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   void onAdd();
+});
+
+// Window close button, Alt+F4 and Cmd+Q with open sessions: ask in the page.
+const quitPrompt = new QuitPrompt({
+  shown: () => closePromptShown(),
+  // A tab's close dialog already holds the keyboard; the user can close again after it.
+  ask: (message) =>
+    closeConfirmOpen()
+      ? Promise.resolve(false)
+      : askCloseConfirm("会话仍在运行", { message, confirmLabel: "退出", focusCancel: true }),
+  confirm: () => quitConfirmed(),
+});
+void onCloseRequested((sessions) => {
+  void quitPrompt.request(sessions);
 });
 
 void start();

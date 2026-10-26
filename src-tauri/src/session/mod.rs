@@ -205,6 +205,12 @@ impl SessionState {
         self.lock().sessions.len()
     }
 
+    /// Sessions starting or running. Closing the app ends all of them.
+    pub fn open_count(&self) -> usize {
+        let guard = self.lock();
+        guard.sessions.len() + guard.pending.len()
+    }
+
     #[cfg(test)]
     fn pending_count(&self) -> usize {
         self.lock().pending.len()

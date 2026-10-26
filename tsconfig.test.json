@@ -30,6 +30,8 @@
     "src/zoom.test.ts",
     "src/appearance.test.ts",
     "src/remote-shell.test.ts",
-    "src/planets.test.ts"
+    "src/planets.test.ts",
+    "src/label-layout.test.ts",
+    "src/quit-confirm.test.ts"
   ]
 }
