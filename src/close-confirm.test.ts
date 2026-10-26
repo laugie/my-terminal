@@ -24,12 +24,12 @@ test("Escape cancels; other keys are left to the focused button", () => {
 
 test("the dialog names the tab and offers cancel and end", () => {
   assert.equal(CLOSE_CONFIRM_MESSAGE, "结束该会话？");
-  const html = renderCloseConfirm("DMIT <1>");
+  const html = renderCloseConfirm("app-server <1>");
   assert.ok(html.includes('role="alertdialog"'));
   assert.ok(html.includes('aria-modal="true"'));
   assert.ok(html.includes(CLOSE_CONFIRM_MESSAGE));
-  assert.ok(html.includes("DMIT &lt;1&gt;"), "标题要转义");
-  assert.equal(html.includes("DMIT <1>"), false);
+  assert.ok(html.includes("app-server &lt;1&gt;"), "标题要转义");
+  assert.equal(html.includes("app-server <1>"), false);
   assert.ok(html.includes('data-choice="cancel"'));
   assert.ok(html.includes('data-choice="confirm"'));
 });
