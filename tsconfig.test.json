@@ -26,6 +26,7 @@
     "src/diagram.test.ts",
     "src/tabs.test.ts",
     "src/connection-menu.test.ts",
-    "src/close-confirm.test.ts"
+    "src/close-confirm.test.ts",
+    "src/zoom.test.ts"
   ]
 }

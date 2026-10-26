@@ -66,6 +66,8 @@ interface Session {
 }
 
 export interface TerminalHost {
+  /** Fit the active tab again after a zoom change. */
+  refit(): void;
   openDevice(key: string, name: string, connectionName?: string): Promise<{ id: string }>;
   openHost(key: string, host: HostEntry): Promise<{ id: string }>;
   discard(key: string): void;
@@ -159,7 +161,8 @@ export function mountTerminal(
       if (action === null) {
         return true;
       }
-      if (!event.defaultPrevented) {
+      // xterm also calls this for keyup and keypress. Act once, on keydown.
+      if (event.type === "keydown" && !event.defaultPrevented) {
         hooks.onShortcut(action);
       }
       return false;
@@ -374,7 +377,17 @@ export function mountTerminal(
   }
 
   function onWindowKeyDown(event: KeyboardEvent): void {
-    if (event.isComposing || event.altKey || typingInForm(event)) {
+    if (event.isComposing || event.altKey) {
+      return;
+    }
+    const zoom = shortcutAction(event, shortcutPlatform());
+    if (zoom?.type === "zoom") {
+      // Zoom keys type nothing in a form field, so they work on the login screen too.
+      consume(event);
+      hooks.onShortcut(zoom);
+      return;
+    }
+    if (typingInForm(event)) {
       return;
     }
     if (event.ctrlKey && !event.metaKey && event.key === "Tab") {
@@ -514,7 +527,15 @@ export function mountTerminal(
     return sessions.get(activeKey);
   }
 
+  function refit(): void {
+    scheduleFit();
+    // xterm measures the cell size again only after the pixel ratio change
+    // reaches it, so fit once more a moment later.
+    window.setTimeout(scheduleFit, 150);
+  }
+
   return {
+    refit,
     openDevice,
     openHost,
     discard,

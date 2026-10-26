@@ -1,6 +1,7 @@
 /** Toolbar and tab icons. Static markup only; no user text is interpolated. */
 export type UiIconName =
   | "plus"
+  | "minus"
   | "close"
   | "topology"
   | "servers"
@@ -11,6 +12,7 @@ export type UiIconName =
 
 const PATHS: Record<UiIconName, string> = {
   plus: `<path d="M8 3.5v9M3.5 8h9"/>`,
+  minus: `<path d="M3.5 8h9"/>`,
   close: `<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>`,
   topology:
     `<rect x="6" y="1.75" width="4" height="3.5" rx="1"/>` +

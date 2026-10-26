@@ -82,6 +82,13 @@ impl From<serde_json::Error> for ConfigError {
     }
 }
 
+/// UI zoom steps in percent. The frontend `ZOOM_LEVELS` is the same list.
+pub const ZOOM_LEVELS: [u16; 11] = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+
+pub fn is_zoom_level(percent: u16) -> bool {
+    ZOOM_LEVELS.contains(&percent)
+}
+
 /// Local settings. `login_lock_enabled` is omitted when false so an old
 /// `settings: {}` file stays byte-compatible and means the lock is off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -89,6 +96,26 @@ impl From<serde_json::Error> for ConfigError {
 pub struct Settings {
     #[serde(default, skip_serializing_if = "is_false")]
     pub login_lock_enabled: bool,
+    /// UI zoom in percent. None is 100% and is not written.
+    #[serde(
+        default,
+        deserialize_with = "lenient_zoom",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ui_zoom: Option<u16>,
+}
+
+/// A value off the zoom ladder is read as 100%. It must not fail the whole
+/// file, which would be treated as corrupt and reset.
+fn lenient_zoom<'de, D>(deserializer: D) -> Result<Option<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_u64()
+        .and_then(|number| u16::try_from(number).ok())
+        .filter(|percent| *percent != 100 && is_zoom_level(*percent)))
 }
 
 fn is_false(value: &bool) -> bool {
@@ -368,6 +395,15 @@ fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
 
 type SaveHook = Box<dyn Fn(&Path, &[u8]) -> Result<(), String> + Send>;
 
+/// UI zoom as the settings row shows it. `message` explains a failed save.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoomView {
+    pub percent: u16,
+    pub read_only: bool,
+    pub message: Option<String>,
+}
+
 /// In-memory view of the login-lock switch. `message` is a config notice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginLockView {
@@ -442,6 +478,32 @@ impl JsonHostStore {
         self.ensure_writable()?;
         let mut next = self.config.clone();
         next.settings.login_lock_enabled = enabled;
+        next.version = CONFIG_VERSION;
+        self.persist(&next)?;
+        self.config = next;
+        Ok(())
+    }
+
+    pub fn ui_zoom_view(&self) -> ZoomView {
+        ZoomView {
+            percent: self.config.settings.ui_zoom.unwrap_or(100),
+            read_only: self.config.read_only,
+            message: if self.config.read_only {
+                self.config.write_error.clone()
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Save a zoom level. 100% removes the field so the file is as before.
+    pub fn set_ui_zoom(&mut self, percent: u16) -> Result<(), String> {
+        if !is_zoom_level(percent) {
+            return Err("缩放比例无效".to_string());
+        }
+        self.ensure_writable()?;
+        let mut next = self.config.clone();
+        next.settings.ui_zoom = (percent != 100).then_some(percent);
         next.version = CONFIG_VERSION;
         self.persist(&next)?;
         self.config = next;

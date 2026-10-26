@@ -1,6 +1,7 @@
 // 标签状态机。不碰 DOM，会话的打开和关闭由调用方注入。
 
 import { deviceTabTitle } from "./connection-menu.js";
+import type { ZoomStep } from "./zoom.js";
 
 export type TabStatus = "connecting" | "connected" | "ended" | "failed";
 
@@ -31,10 +32,13 @@ export interface TabStripDeps {
 
 export type ShortcutAction =
   | { type: "close" }
-  | { type: "jump"; index: number | "last" };
+  | { type: "jump"; index: number | "last" }
+  | { type: "zoom"; step: ZoomStep };
 
 export interface ShortcutKey {
   key: string;
+  /** Physical key. Lets zoom work where Shift or the layout changes `key`. */
+  code?: string;
   metaKey?: boolean;
   ctrlKey?: boolean;
   shiftKey?: boolean;
@@ -79,6 +83,10 @@ export function shortcutAction(
     if (!event.metaKey || event.ctrlKey) {
       return null;
     }
+    const zoom = zoomStep(event);
+    if (zoom) {
+      return { type: "zoom", step: zoom };
+    }
     if (key === "w") {
       return { type: "close" };
     }
@@ -86,6 +94,11 @@ export function shortcutAction(
   }
   if (event.metaKey || !event.ctrlKey) {
     return null;
+  }
+  // Bare Ctrl+- would otherwise reach the shell as ^_; zoom takes it on purpose.
+  const zoom = zoomStep(event);
+  if (zoom) {
+    return { type: "zoom", step: zoom };
   }
   if (key === "w" && event.shiftKey) {
     return { type: "close" };
@@ -97,6 +110,21 @@ export function shortcutAction(
     return null;
   }
   return jumpIndex(key);
+}
+
+/** `=` / `+` zoom in, `-` / `_` out, `0` resets, on the main row or the numpad. */
+function zoomStep(event: ShortcutKey): ZoomStep | null {
+  const code = event.code ?? "";
+  if (code === "Equal" || code === "NumpadAdd" || event.key === "=" || event.key === "+") {
+    return "in";
+  }
+  if (code === "Minus" || code === "NumpadSubtract" || event.key === "-" || event.key === "_") {
+    return "out";
+  }
+  if (code === "Digit0" || code === "Numpad0" || event.key === "0") {
+    return "reset";
+  }
+  return null;
 }
 
 function jumpIndex(key: string): ShortcutAction | null {

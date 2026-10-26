@@ -17,6 +17,8 @@
     "allow-open-session",
     "allow-write-session",
     "allow-resize-session",
-    "allow-close-session"
+    "allow-close-session",
+    "allow-ui-zoom-load",
+    "allow-ui-zoom-set"
   ]
 }

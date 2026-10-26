@@ -12,6 +12,7 @@
 - macOS 从 Finder 启动时，Tailscale 状态不再因 App 包内二进制进入 GUI 模式而解析失败。查找 CLI 时在 PATH 之后检查 `/usr/local/bin`、`/opt/homebrew/bin` 和 App 包内路径；调用时直接 spawn 并设置 `TERM=dumb`。状态 JSON 容忍 null 与单个坏节点，失败原因显示在主机列表上方。
 
 ### Added
+- 界面缩放（#33）：界面和终端字体一起缩放，档位 50%–200%。macOS 用 Cmd+= / Cmd+- / Cmd+0，Windows 用 Ctrl+= / Ctrl+- / Ctrl+0，也支持 Shift 写法和小键盘；在终端和输入框里都由应用处理，不发给远端。Windows 上裸 Ctrl+- 不再发给 shell。设置里新增「界面缩放」：−、百分比、+、重置。比例写入 `config.json` 的 `settings.uiZoom`，重启后保持；100% 不写，非法值按 100% 处理，不当作配置损坏。每次缩放后当前终端重新计算行列并通知远端。
 - `connections` 的每一项可以单独写 `host` 和 `port`（#31），只对这条中转生效：替换 `%h`、`%p`，也作为 ssh 的目标主机和端口。用于经另一台机器连目标机的 Tailscale 地址，例如 `tailscale nc %h %p`。不写时仍用设备自己的 `host`、`port`。`host` 只允许字母、数字和 `.` `-` `_`，端口范围与设备相同，非法时读取配置报错。
 - 首页在同一设备有多条 `connections` 时弹出连接方式菜单，可选默认直连 / ProxyJump 或某条中转命令，并在新标签打开。标签标题为设备名，或「设备名 · 连接名」。菜单里的模板检查与后端白名单一致。不支持在跳板机上输入口令。
 - 设备可以在直连 / ProxyJump 之外再声明 `connections`，经跳板机执行命令中转（OpenSSH `ProxyCommand`）。命令模板必须同时包含 `%h` 和 `%p`，并且只允许白名单字符。跳板机不能再套一层 jump。ssh 以 255 退出时，终端保留原来的输出，并追加一行提示，区分跳板机、目标机、中转不可达和未知失败。不支持在跳板机上输入口令。

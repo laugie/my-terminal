@@ -155,6 +155,14 @@ impl HostState {
         self.with_store(|store| store.set_login_lock_enabled(enabled))?
     }
 
+    pub fn ui_zoom_view(&self) -> Result<crate::config::ZoomView, String> {
+        self.with_store(|store| store.ui_zoom_view())
+    }
+
+    pub fn set_ui_zoom(&self, percent: u16) -> Result<(), String> {
+        self.with_store(|store| store.set_ui_zoom(percent))?
+    }
+
     fn with_store<T>(&self, f: impl FnOnce(&mut JsonHostStore) -> T) -> Result<T, String> {
         let mut guard = self
             .store
