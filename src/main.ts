@@ -105,6 +105,8 @@ const tabBar: TabBar = mountTabBar(shell, {
 });
 
 const host: { terminal: TerminalHost | null } = { terminal: null };
+/** Wait after a tab connects before the background beautify run. */
+const AUTO_BEAUTIFY_DELAY_MS = 4000;
 /** Route of each session tab, for the remote shell script. */
 const shellTargets = new Map<string, ShellTarget>();
 const strip: TabStrip = new TabStrip({
@@ -148,7 +150,13 @@ const terminal = mountTerminal(terminalPanel, {
     strip.onConnected(key, id);
     const target = shellTargets.get(key);
     if (target) {
-      void autoBeautify.connected(target, tabTitle(key));
+      // The PTY is up but ssh may still be logging in; start a little later.
+      window.setTimeout(() => {
+        const tab = strip.tabs.find((item) => item.key === key);
+        if (tab && tab.status === "connected" && shellTargets.get(key) === target) {
+          void autoBeautify.connected(target, tab.title);
+        }
+      }, AUTO_BEAUTIFY_DELAY_MS);
     }
   },
   onExit: (key, code) => {

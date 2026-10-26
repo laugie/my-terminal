@@ -282,6 +282,12 @@ zsh_highlighting() {
   if [ "$mode" = auto ] && [ -e "$dir/.highlight-failed" ]; then
     return 0
   fi
+  # On macOS without the developer tools /usr/bin/git only opens an installer prompt.
+  if [ "$(uname -s 2>/dev/null)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1; then
+    : > "$dir/.highlight-failed"
+    say NOTE "远端 macOS 没有安装开发者工具（git），未开启 zsh 语法高亮；可用 Homebrew 安装 zsh-syntax-highlighting"
+    return 0
+  fi
   if ! command -v git >/dev/null 2>&1; then
     : > "$dir/.highlight-failed"
     say NOTE "远端没有 git，未安装 zsh 语法高亮；装好 zsh-syntax-highlighting 后重新登录即可生效"

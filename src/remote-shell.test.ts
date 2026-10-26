@@ -83,6 +83,34 @@ test("a failed auto run is reported and not retried this run; manual apply still
   assert.deepEqual(seen, ["auto:无法免交互登录", "apply:applied"]);
 });
 
+test("a manual run waits for an auto run of the same host", async () => {
+  const order: string[] = [];
+  let release!: () => void;
+  const auto = new AutoBeautify({
+    run: (_target, mode) => {
+      order.push(`start:${mode}`);
+      if (mode === "auto") {
+        return new Promise<ShellReport>((resolve) => {
+          release = () => {
+            order.push("end:auto");
+            resolve(report("applied"));
+          };
+        });
+      }
+      return Promise.resolve(report("restored"));
+    },
+    enabled: () => true,
+    onReport: () => {},
+  });
+  const first = auto.connected(host, "box");
+  const manual = auto.run(host, "box", "restore");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(order, ["start:auto"], "手动操作等自动美化结束");
+  release();
+  await Promise.all([first, manual]);
+  assert.deepEqual(order, ["start:auto", "end:auto", "start:restore"]);
+});
+
 test("messages say what changed, where the backup is, and when it takes effect", () => {
   const applied = reportMessage(
     report("applied", { files: ["~/.zshrc"], backups: ["~/.my-terminal/backups/.zshrc.1"] }),

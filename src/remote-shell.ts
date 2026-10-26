@@ -75,8 +75,14 @@ export class AutoBeautify {
 
   async run(target: ShellTarget, label: string, mode: ShellMode): Promise<void> {
     if (mode !== "auto") {
+      const key = targetKey(target);
+      // Two runs at once could both append a block; let a running one finish.
+      const running = this.started.get(key);
       // After a manual run this launch has nothing left for auto to do.
-      this.started.set(targetKey(target), Promise.resolve());
+      this.started.set(key, Promise.resolve());
+      if (running) {
+        await running;
+      }
     }
     let result: ShellReport | Error;
     try {
