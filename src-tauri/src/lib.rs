@@ -1,6 +1,8 @@
+pub mod appearance;
 pub mod auth;
 pub mod config;
 pub mod hosts;
+pub mod remote_shell;
 pub mod session;
 pub mod topology;
 pub mod zoom;
@@ -48,6 +50,9 @@ pub fn run() {
             session::close_session,
             zoom::ui_zoom_load,
             zoom::ui_zoom_set,
+            appearance::appearance_load,
+            appearance::appearance_set,
+            remote_shell::remote_shell_run,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

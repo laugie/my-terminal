@@ -1,3 +1,5 @@
+import { ANSI_KEYS, FONTS, THEMES, themeOf, type AppearanceController } from "./appearance.ts";
+import { fontInstalled } from "./appearance-api.ts";
 import { authSetLock, authSettings, authSetup, type LockSettings } from "./auth.ts";
 import { errorText } from "./hosts.ts";
 import { mountCredentialPrompt } from "./login.ts";
@@ -9,13 +11,30 @@ import { zoomLabel, type ZoomController } from "./zoom.ts";
 export interface SettingsPanel {
   /** Show the current zoom level and which steps are possible. */
   renderZoom(): void;
+  /** Show the current terminal theme and font. */
+  renderAppearance(): void;
+  /** Refresh the remote shell row; `status` replaces the last result line. */
+  renderShell(status?: string): void;
+}
+
+/** The remote shell row acts on the active tab's host. */
+export interface ShellActions {
+  /** Title of the active session tab, or null on the home tab. */
+  active(): string | null;
+  run(mode: "apply" | "restore"): Promise<void>;
 }
 
 /**
- * Gear button dialog: UI zoom, and a switch that requires login on the next
- * launch. The button itself is created by the shell so the top bar owns the slot.
+ * Gear button dialog: UI zoom, terminal theme and font, and a switch that
+ * requires login on the next launch. The button itself is created by the
+ * shell so the top bar owns the slot.
  */
-export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): SettingsPanel {
+export function mountSettings(
+  button: HTMLButtonElement,
+  zoom: ZoomController,
+  appearance: AppearanceController,
+  shell: ShellActions,
+): SettingsPanel {
   const slot = button.parentElement;
   if (!(slot instanceof HTMLElement)) {
     throw new Error("missing settings slot");
@@ -97,11 +116,101 @@ export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): 
   const divider = document.createElement("hr");
   divider.className = "settings-divider";
 
+  const themeField = selectField("配色", "settings-theme");
+  for (const theme of THEMES) {
+    themeField.select.append(new Option(theme.label, theme.id));
+  }
+  const swatches = document.createElement("div");
+  swatches.className = "settings-swatches";
+  swatches.setAttribute("aria-hidden", "true");
+  const fontField = selectField("终端字体", "settings-font");
+  const fontOptions = FONTS.map((choice) => {
+    const installed = choice.bundled || fontInstalled(choice.family);
+    const option = new Option(installed ? choice.label : `${choice.label}（未安装）`, choice.id);
+    option.dataset.installed = installed ? "true" : "false";
+    fontField.select.append(option);
+    return option;
+  });
+  const appearanceNotice = document.createElement("p");
+  appearanceNotice.className = "settings-notice";
+  themeField.select.addEventListener("change", () => {
+    void appearance.set({ theme: themeField.select.value });
+  });
+  fontField.select.addEventListener("change", () => {
+    void appearance.set({ font: fontField.select.value });
+  });
+
+  const lookDivider = document.createElement("hr");
+  lookDivider.className = "settings-divider";
+
+  const shellDivider = document.createElement("hr");
+  shellDivider.className = "settings-divider";
+  const autoRow = document.createElement("label");
+  autoRow.className = "settings-switch";
+  const autoBox = document.createElement("input");
+  autoBox.type = "checkbox";
+  const autoCaption = document.createElement("span");
+  autoCaption.textContent = "连接后自动美化远端 Shell";
+  autoRow.append(autoBox, autoCaption);
+  const shellHelp = document.createElement("p");
+  shellHelp.className = "settings-help";
+  shellHelp.textContent =
+    "先备份 ~/.bashrc 或 ~/.zshrc，再加入 ls 颜色、彩色提示符和 zsh 语法高亮；已有彩色提示符或主题框架时不覆盖。需要能用密钥或 ssh-agent 免交互登录。";
+  const shellRow = document.createElement("div");
+  shellRow.className = "settings-shell";
+  const shellTarget = document.createElement("span");
+  shellTarget.className = "settings-shell-target";
+  const applyButton = document.createElement("button");
+  applyButton.type = "button";
+  applyButton.className = "button";
+  applyButton.textContent = "立即美化";
+  const restoreButton = document.createElement("button");
+  restoreButton.type = "button";
+  restoreButton.className = "button ghost";
+  restoreButton.textContent = "恢复备份";
+  const shellButtons = document.createElement("div");
+  shellButtons.className = "settings-shell-buttons";
+  shellButtons.append(applyButton, restoreButton);
+  shellRow.append(shellTarget, shellButtons);
+  const shellStatus = document.createElement("p");
+  shellStatus.className = "settings-shell-status";
+  shellStatus.setAttribute("aria-live", "polite");
+  let shellBusy = false;
+  autoBox.addEventListener("change", () => {
+    void appearance.set({ autoBeautify: autoBox.checked });
+  });
+  for (const [button, mode] of [
+    [applyButton, "apply"],
+    [restoreButton, "restore"],
+  ] as const) {
+    button.addEventListener("click", () => {
+      if (shellBusy || shell.active() === null) {
+        return;
+      }
+      shellBusy = true;
+      renderShell(mode === "apply" ? "正在美化…" : "正在恢复…");
+      void shell.run(mode).finally(() => {
+        shellBusy = false;
+        renderShell();
+      });
+    });
+  }
+
   dialog.append(
     title,
     zoomRow,
     zoomHint,
     zoomNotice,
+    lookDivider,
+    themeField.row,
+    swatches,
+    fontField.row,
+    appearanceNotice,
+    shellDivider,
+    autoRow,
+    shellHelp,
+    shellRow,
+    shellStatus,
     divider,
     row,
     notice,
@@ -112,6 +221,8 @@ export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): 
   );
   slot.append(dialog);
   renderZoom();
+  renderAppearance();
+  renderShell();
 
   let savedEnabled = false;
   let hasSecret = false;
@@ -123,6 +234,7 @@ export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): 
     if (dialog.hidden) {
       dialog.hidden = false;
       button.setAttribute("aria-expanded", "true");
+      renderShell();
       void refresh();
     } else {
       hide();
@@ -247,5 +359,49 @@ export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): 
     zoomNotice.textContent = zoom.message;
   }
 
-  return { renderZoom };
+  function renderAppearance(): void {
+    themeField.select.value = appearance.theme;
+    fontField.select.value = appearance.font;
+    for (const option of fontOptions) {
+      // A missing font stays selectable while it is the saved choice.
+      option.disabled = option.dataset.installed !== "true" && option.value !== appearance.font;
+    }
+    const palette = themeOf(appearance.theme).palette;
+    swatches.style.background = palette.background;
+    swatches.replaceChildren(
+      ...ANSI_KEYS.map((key) => {
+        const chip = document.createElement("span");
+        chip.style.background = palette[key];
+        return chip;
+      }),
+    );
+    appearanceNotice.textContent = appearance.message;
+    autoBox.checked = appearance.autoBeautify;
+    autoBox.disabled = appearance.readOnly;
+  }
+
+  function renderShell(status?: string): void {
+    const label = shell.active();
+    shellTarget.textContent = label === null ? "打开一个主机的标签后可手动操作" : `当前标签：${label}`;
+    applyButton.disabled = label === null || shellBusy;
+    restoreButton.disabled = label === null || shellBusy;
+    if (status !== undefined) {
+      shellStatus.textContent = status;
+    }
+  }
+
+  return { renderZoom, renderAppearance, renderShell };
+}
+
+function selectField(caption: string, id: string): { row: HTMLLabelElement; select: HTMLSelectElement } {
+  const row = document.createElement("label");
+  row.className = "settings-field";
+  row.htmlFor = id;
+  const text = document.createElement("span");
+  text.textContent = caption;
+  const select = document.createElement("select");
+  select.id = id;
+  select.className = "settings-select";
+  row.append(text, select);
+  return { row, select };
 }

@@ -89,6 +89,35 @@ pub fn is_zoom_level(percent: u16) -> bool {
     ZOOM_LEVELS.contains(&percent)
 }
 
+/// Terminal color schemes. The frontend `THEMES` uses the same ids; the first
+/// is the default and is not written.
+pub const TERMINAL_THEMES: [&str; 8] = [
+    "midnight",
+    "deep-sea",
+    "one-dark",
+    "dracula",
+    "tokyo-night",
+    "nord",
+    "solarized-dark",
+    "paper",
+];
+
+/// Topology views: 3D planets (default, not written) or the flat diagram.
+pub const TOPOLOGY_MODES: [&str; 2] = ["3d", "2d"];
+
+/// Terminal fonts. The frontend `FONTS` uses the same ids; the first is the
+/// bundled default and is not written.
+pub const TERMINAL_FONTS: [&str; 8] = [
+    "jetbrains-mono",
+    "system",
+    "sf-mono",
+    "menlo",
+    "cascadia-mono",
+    "consolas",
+    "fira-code",
+    "meslo-nerd",
+];
+
 /// Local settings. `login_lock_enabled` is omitted when false so an old
 /// `settings: {}` file stays byte-compatible and means the lock is off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -103,6 +132,35 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     pub ui_zoom: Option<u16>,
+    /// One of [`TERMINAL_THEMES`]. None is the default and is not written.
+    #[serde(
+        default,
+        deserialize_with = "lenient_theme",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub terminal_theme: Option<String>,
+    /// One of [`TERMINAL_FONTS`]. None is the default and is not written.
+    #[serde(
+        default,
+        deserialize_with = "lenient_font",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub terminal_font: Option<String>,
+    /// Beautify the remote shell after a connection. On unless this is
+    /// `false`; only `false` is written.
+    #[serde(
+        default,
+        deserialize_with = "lenient_off",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_beautify: Option<bool>,
+    /// One of [`TOPOLOGY_MODES`]. None is 3D and is not written.
+    #[serde(
+        default,
+        deserialize_with = "lenient_topology_mode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub topology_mode: Option<String>,
 }
 
 /// A value off the zoom ladder is read as 100%. It must not fail the whole
@@ -116,6 +174,48 @@ where
         .as_u64()
         .and_then(|number| u16::try_from(number).ok())
         .filter(|percent| *percent != 100 && is_zoom_level(*percent)))
+}
+
+/// An unknown theme is read as the default, like an off-ladder zoom.
+fn lenient_theme<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    lenient_choice(deserializer, &TERMINAL_THEMES)
+}
+
+fn lenient_font<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    lenient_choice(deserializer, &TERMINAL_FONTS)
+}
+
+fn lenient_topology_mode<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    lenient_choice(deserializer, &TOPOLOGY_MODES)
+}
+
+/// Only a JSON `false` turns a default-on switch off; anything else is on.
+fn lenient_off<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok((value == serde_json::Value::Bool(false)).then_some(false))
+}
+
+fn lenient_choice<'de, D>(deserializer: D, choices: &[&str]) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_str()
+        .filter(|id| choices.iter().skip(1).any(|choice| *choice == *id))
+        .map(str::to_string))
 }
 
 fn is_false(value: &bool) -> bool {
@@ -404,6 +504,18 @@ pub struct ZoomView {
     pub message: Option<String>,
 }
 
+/// Terminal theme and font as the settings rows show them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceView {
+    pub theme: String,
+    pub font: String,
+    pub auto_beautify: bool,
+    pub topology_mode: String,
+    pub read_only: bool,
+    pub message: Option<String>,
+}
+
 /// In-memory view of the login-lock switch. `message` is a config notice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginLockView {
@@ -504,6 +616,80 @@ impl JsonHostStore {
         self.ensure_writable()?;
         let mut next = self.config.clone();
         next.settings.ui_zoom = (percent != 100).then_some(percent);
+        next.version = CONFIG_VERSION;
+        self.persist(&next)?;
+        self.config = next;
+        Ok(())
+    }
+
+    pub fn appearance_view(&self) -> AppearanceView {
+        let settings = &self.config.settings;
+        AppearanceView {
+            theme: settings
+                .terminal_theme
+                .clone()
+                .unwrap_or_else(|| TERMINAL_THEMES[0].to_string()),
+            font: settings
+                .terminal_font
+                .clone()
+                .unwrap_or_else(|| TERMINAL_FONTS[0].to_string()),
+            auto_beautify: settings.auto_beautify != Some(false),
+            topology_mode: settings
+                .topology_mode
+                .clone()
+                .unwrap_or_else(|| TOPOLOGY_MODES[0].to_string()),
+            read_only: self.config.read_only,
+            message: if self.config.read_only {
+                self.config.write_error.clone()
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Save a theme and/or font. `None` keeps the current value; a default
+    /// removes the field so the file is as before. An unknown id rejects the
+    /// whole call.
+    pub fn set_appearance(&mut self, theme: Option<&str>, font: Option<&str>) -> Result<(), String> {
+        if theme.is_some_and(|id| !TERMINAL_THEMES.contains(&id)) {
+            return Err("配色无效".to_string());
+        }
+        if font.is_some_and(|id| !TERMINAL_FONTS.contains(&id)) {
+            return Err("字体无效".to_string());
+        }
+        self.ensure_writable()?;
+        let mut next = self.config.clone();
+        if let Some(id) = theme {
+            next.settings.terminal_theme = (id != TERMINAL_THEMES[0]).then(|| id.to_string());
+        }
+        if let Some(id) = font {
+            next.settings.terminal_font = (id != TERMINAL_FONTS[0]).then(|| id.to_string());
+        }
+        next.version = CONFIG_VERSION;
+        self.persist(&next)?;
+        self.config = next;
+        Ok(())
+    }
+
+    /// 3D is the default and removes the field.
+    pub fn set_topology_mode(&mut self, mode: &str) -> Result<(), String> {
+        if !TOPOLOGY_MODES.contains(&mode) {
+            return Err("拓扑视图无效".to_string());
+        }
+        self.ensure_writable()?;
+        let mut next = self.config.clone();
+        next.settings.topology_mode = (mode != TOPOLOGY_MODES[0]).then(|| mode.to_string());
+        next.version = CONFIG_VERSION;
+        self.persist(&next)?;
+        self.config = next;
+        Ok(())
+    }
+
+    /// On is the default and removes the field.
+    pub fn set_auto_beautify(&mut self, enabled: bool) -> Result<(), String> {
+        self.ensure_writable()?;
+        let mut next = self.config.clone();
+        next.settings.auto_beautify = (!enabled).then_some(false);
         next.version = CONFIG_VERSION;
         self.persist(&next)?;
         self.config = next;

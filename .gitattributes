@@ -1,0 +1,2 @@
+# 远端 shell 脚本经 ssh 原样送到远端，Windows 检出也必须保持 LF。
+*.sh text eol=lf

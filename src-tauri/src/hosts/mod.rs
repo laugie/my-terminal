@@ -1,4 +1,5 @@
 mod exec;
+pub(crate) use exec::summarize_cli_text;
 mod list;
 mod parse;
 mod store;
@@ -161,6 +162,22 @@ impl HostState {
 
     pub fn set_ui_zoom(&self, percent: u16) -> Result<(), String> {
         self.with_store(|store| store.set_ui_zoom(percent))?
+    }
+
+    pub fn appearance_view(&self) -> Result<crate::config::AppearanceView, String> {
+        self.with_store(|store| store.appearance_view())
+    }
+
+    pub fn set_appearance(&self, theme: Option<&str>, font: Option<&str>) -> Result<(), String> {
+        self.with_store(|store| store.set_appearance(theme, font))?
+    }
+
+    pub fn set_topology_mode(&self, mode: &str) -> Result<(), String> {
+        self.with_store(|store| store.set_topology_mode(mode))?
+    }
+
+    pub fn set_auto_beautify(&self, enabled: bool) -> Result<(), String> {
+        self.with_store(|store| store.set_auto_beautify(enabled))?
     }
 
     fn with_store<T>(&self, f: impl FnOnce(&mut JsonHostStore) -> T) -> Result<T, String> {

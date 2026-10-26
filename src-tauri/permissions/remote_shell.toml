@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-remote-shell-run"
+description = "Enables the remote_shell_run command without any pre-configured scope."
+commands.allow = ["remote_shell_run"]

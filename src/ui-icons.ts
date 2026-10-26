@@ -8,7 +8,8 @@ export type UiIconName =
   | "reload"
   | "gear"
   | "reconnect"
-  | "terminal";
+  | "terminal"
+  | "planet";
 
 const PATHS: Record<UiIconName, string> = {
   plus: `<path d="M8 3.5v9M3.5 8h9"/>`,
@@ -29,6 +30,7 @@ const PATHS: Record<UiIconName, string> = {
     `<path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.58 3.58l1.06 1.06M11.36 11.36l1.06 1.06M3.58 12.42l1.06-1.06M11.36 4.64l1.06-1.06"/>` +
     `<circle cx="8" cy="8" r="4.25"/>`,
   reconnect: `<path d="M2.75 8a5.25 5.25 0 0 1 9-3.7M13.25 8a5.25 5.25 0 0 1-9 3.7M11.75 1.75v2.75H9M4.25 14.25V11.5H7"/>`,
+  planet: `<circle cx="8" cy="8" r="3.5"/><ellipse cx="8" cy="8" rx="7" ry="2.4" transform="rotate(-18 8 8)"/>`,
   terminal: `<rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.75"/><path d="M4.5 6.25 6.75 8 4.5 9.75M8.5 10h3"/>`,
 };
 

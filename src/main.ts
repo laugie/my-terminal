@@ -1,3 +1,7 @@
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/700.css";
+import { AppearanceController, fontOf, themeOf } from "./appearance.ts";
+import { fontReady, loadAppearance, saveAppearance } from "./appearance-api.ts";
 import {
   addManualHost,
   errorText,
@@ -10,7 +14,9 @@ import { loadTopology, type TopologyView } from "./topology.ts";
 import { renderTopology, syncDeviceOpenState } from "./topology-view.ts";
 import { mountTerminal, type TerminalHost } from "./terminal.ts";
 import { mountTabBar, toolButton, type TabBar } from "./tab-bar.ts";
-import { closeSession } from "./session.ts";
+import { closeSession, sshTargetOf } from "./session.ts";
+import { AutoBeautify, reportMessage, type ShellTarget } from "./remote-shell.ts";
+import { runRemoteShell } from "./remote-shell-api.ts";
 import { askCloseConfirm, closeConfirmOpen, needsCloseConfirm } from "./close-confirm.ts";
 import { sessionLimitMessage, TabStrip, type ShortcutAction } from "./tabs.ts";
 import { authSettings, authStatus, type AuthStateName } from "./auth.ts";
@@ -33,6 +39,9 @@ type Page = "topology" | "manual";
 const manualButton = toolButton("servers", "手动服务器");
 manualButton.setAttribute("aria-pressed", "false");
 const refreshButton = toolButton("reload", "重新加载");
+const planetButton = toolButton("planet", "3D 视图");
+planetButton.setAttribute("aria-pressed", "true");
+planetButton.title = "在 3D 星球和平面图之间切换";
 
 const statusBar = el("div", "status");
 statusBar.setAttribute("role", "status");
@@ -96,6 +105,10 @@ const tabBar: TabBar = mountTabBar(shell, {
 });
 
 const host: { terminal: TerminalHost | null } = { terminal: null };
+/** Wait after a tab connects before the background beautify run. */
+const AUTO_BEAUTIFY_DELAY_MS = 4000;
+/** Route of each session tab, for the remote shell script. */
+const shellTargets = new Map<string, ShellTarget>();
 const strip: TabStrip = new TabStrip({
   openSession(name: string, connectionName?: string): Promise<{ id: string }> {
     const opener = host.terminal;
@@ -113,6 +126,11 @@ const strip: TabStrip = new TabStrip({
     if (!tab) {
       throw new Error("无法打开标签");
     }
+    shellTargets.set(tab.key, {
+      kind: "device",
+      deviceName: name,
+      ...(connectionName ? { connectionName } : {}),
+    });
     return opener.openDevice(tab.key, name, connectionName);
   },
   closeSession: (id) => closeSession(id),
@@ -130,6 +148,16 @@ const terminal = mountTerminal(terminalPanel, {
   },
   onConnected: (key, id) => {
     strip.onConnected(key, id);
+    const target = shellTargets.get(key);
+    if (target) {
+      // The PTY is up but ssh may still be logging in; start a little later.
+      window.setTimeout(() => {
+        const tab = strip.tabs.find((item) => item.key === key);
+        if (tab && tab.status === "connected" && shellTargets.get(key) === target) {
+          void autoBeautify.connected(target, tab.title);
+        }
+      }, AUTO_BEAUTIFY_DELAY_MS);
+    }
   },
   onExit: (key, code) => {
     strip.onExit(key, code);
@@ -164,7 +192,7 @@ const settingsSlot = el("div", "settings-slot");
 const settingsButton = toolButton("gear", "设置", { iconOnly: true });
 settingsButton.setAttribute("aria-expanded", "false");
 settingsSlot.append(settingsButton);
-tabBar.end.append(manualButton, refreshButton, el("span", "toolbar-divider"), settingsSlot);
+tabBar.end.append(planetButton, manualButton, refreshButton, el("span", "toolbar-divider"), settingsSlot);
 let zoomedTo = 100;
 const zoom = new ZoomController({
   save: (percent) => saveUiZoom(percent),
@@ -176,7 +204,57 @@ const zoom = new ZoomController({
     settings.renderZoom();
   },
 });
-const settings = mountSettings(settingsButton, zoom);
+let appearanceRequest = 0;
+let paintedMode = "3d";
+const appearance: AppearanceController = new AppearanceController({
+  save: (change) => saveAppearance(change),
+  onChange: () => {
+    settings.renderAppearance();
+    planetButton.setAttribute("aria-pressed", appearance.topologyMode === "3d" ? "true" : "false");
+    if (appearance.topologyMode !== paintedMode) {
+      paintedMode = appearance.topologyMode;
+      paintTopology();
+    }
+    const theme = themeOf(appearance.theme);
+    const font = fontOf(appearance.font);
+    const request = ++appearanceRequest;
+    void fontReady(font.family, font.bundled).then(() => {
+      if (request === appearanceRequest) {
+        terminal.setAppearance(theme, font);
+      }
+    });
+  },
+});
+const autoBeautify = new AutoBeautify({
+  run: (target, mode) => runRemoteShell(target, mode),
+  enabled: () => appearance.autoBeautify,
+  onReport: (label, result, mode) => {
+    const message =
+      result instanceof Error ? `${label}：${result.message}` : reportMessage(result, label);
+    settings.renderShell(message);
+    if (AutoBeautify.notable(result, mode)) {
+      showToast(message);
+    }
+  },
+});
+const settings = mountSettings(settingsButton, zoom, appearance, {
+  active: () => {
+    const tab = strip.tabs.find((item) => item.key === strip.activeKey);
+    return tab && tab.kind === "session" && shellTargets.has(tab.key) ? tab.title : null;
+  },
+  run: (mode) => {
+    const key = strip.activeKey;
+    const target = shellTargets.get(key);
+    return target ? autoBeautify.run(target, tabTitle(key), mode) : Promise.resolve();
+  },
+});
+void loadAppearance()
+  .then((view) => {
+    appearance.load(view);
+  })
+  .catch(() => {
+    appearance.load({ theme: appearance.theme, font: appearance.font, readOnly: false });
+  });
 void loadUiZoom()
   .then((view) => {
     zoom.load(view);
@@ -210,6 +288,12 @@ new ResizeObserver(() => {
   });
 }).observe(topologyRoot);
 
+planetButton.addEventListener("click", () => {
+  void appearance.set({ topologyMode: appearance.topologyMode === "3d" ? "2d" : "3d" });
+  if (page !== "topology" || !viewingHome()) {
+    showPage("topology");
+  }
+});
 manualButton.addEventListener("click", () => {
   if (page === "manual" && viewingHome()) {
     showPage("topology");
@@ -357,6 +441,7 @@ async function requestClose(key: string): Promise<void> {
     return;
   }
   terminal.discard(key);
+  shellTargets.delete(key);
   strip.close(key);
   present(strip.activeKey);
 }
@@ -400,6 +485,7 @@ async function connectHost(host: HostEntry): Promise<void> {
       if (!tab) {
         throw new Error("无法打开标签");
       }
+      shellTargets.set(tab.key, { kind: "host", ...sshTargetOf(host) });
       return terminal.openHost(tab.key, host);
     });
     present(strip.activeKey);
@@ -475,6 +561,7 @@ function paintTopology(): void {
     },
     activeName: active?.track === "device" ? active.deviceName ?? null : null,
     canOpen: strip.canOpen(),
+    mode: appearance.topologyMode,
   });
 }
 
@@ -683,6 +770,29 @@ function sourceLabel(source: HostEntry["source"]): string {
       return "Tailscale+手动";
   }
 }
+
+function tabTitle(key: string): string {
+  return strip.tabs.find((item) => item.key === key)?.title ?? "";
+}
+
+let toastTimer = 0;
+const toast = el("div", "toast");
+toast.setAttribute("role", "status");
+toast.hidden = true;
+app.append(toast);
+
+/** A short notice that does not move the terminal. Click to dismiss. */
+function showToast(message: string): void {
+  toast.textContent = message;
+  toast.hidden = false;
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    toast.hidden = true;
+  }, 9000);
+}
+toast.addEventListener("click", () => {
+  toast.hidden = true;
+});
 
 function field(
   form: HTMLFormElement,

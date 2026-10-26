@@ -1,6 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { fontOf, themeOf, type FontChoice, type ThemeChoice } from "./appearance.ts";
 import { errorText, type HostEntry } from "./hosts.ts";
 import {
   closeSession,
@@ -18,30 +19,6 @@ import { WriteQueue } from "./write-queue.ts";
 /** Extra time after Exit before the process is reaped, so a late chunk can land. */
 const EXIT_REAP_DELAY_MS = 300;
 
-/** Matches the app theme tokens in styles.css (--term-bg, --text, --accent). */
-const TERMINAL_THEME = {
-  background: "#0b0e13",
-  foreground: "#d8dee9",
-  cursor: "#79a8ff",
-  cursorAccent: "#0b0e13",
-  selectionBackground: "rgba(79, 140, 255, 0.35)",
-  black: "#1b212a",
-  red: "#f06a6a",
-  green: "#3fb950",
-  yellow: "#d6a64a",
-  blue: "#4f8cff",
-  magenta: "#c678dd",
-  cyan: "#56c2d6",
-  white: "#d8dee9",
-  brightBlack: "#6e7a8a",
-  brightRed: "#ff8b8b",
-  brightGreen: "#5fd57a",
-  brightYellow: "#ecc56b",
-  brightBlue: "#79a8ff",
-  brightMagenta: "#d899ec",
-  brightCyan: "#7fd8e8",
-  brightWhite: "#ffffff",
-};
 
 type Phase = "connecting" | "live" | "ended" | "failed";
 
@@ -68,6 +45,8 @@ interface Session {
 export interface TerminalHost {
   /** Fit the active tab again after a zoom change. */
   refit(): void;
+  /** Recolor and re-font every tab, open or not, then fit again. */
+  setAppearance(theme: ThemeChoice, font: FontChoice): void;
   openDevice(key: string, name: string, connectionName?: string): Promise<{ id: string }>;
   openHost(key: string, host: HostEntry): Promise<{ id: string }>;
   discard(key: string): void;
@@ -95,6 +74,9 @@ export function mountTerminal(
   const sessions = new Map<string, Session>();
   let activeKey: string | null = null;
   let resizeFrame = 0;
+  let theme = themeOf(undefined);
+  let font = fontOf(undefined);
+  paintBackground();
 
   const observer = new ResizeObserver(() => {
     scheduleFit();
@@ -128,12 +110,13 @@ export function mountTerminal(
     view.hidden = true;
     stack.append(view);
     const term = new Terminal({
-      fontFamily: '"SF Mono", Menlo, Monaco, "Cascadia Mono", Consolas, ui-monospace, monospace',
+      fontFamily: font.stack,
       fontSize: 14,
       lineHeight: 1.15,
       cursorBlink: true,
       scrollback: 5000,
-      theme: TERMINAL_THEME,
+      theme: { ...theme.palette },
+      minimumContrastRatio: theme.minimumContrastRatio ?? 1,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -527,6 +510,24 @@ export function mountTerminal(
     return sessions.get(activeKey);
   }
 
+  function setAppearance(nextTheme: ThemeChoice, nextFont: FontChoice): void {
+    theme = nextTheme;
+    font = nextFont;
+    paintBackground();
+    for (const session of sessions.values()) {
+      session.term.options.theme = { ...theme.palette };
+      session.term.options.minimumContrastRatio = theme.minimumContrastRatio ?? 1;
+      // A new family changes the cell size, so rows and columns follow.
+      session.term.options.fontFamily = font.stack;
+    }
+    refit();
+  }
+
+  /** The panel shows the theme background around the cell grid. */
+  function paintBackground(): void {
+    panel.style.setProperty("--term-bg", theme.palette.background);
+  }
+
   function refit(): void {
     scheduleFit();
     // xterm measures the cell size again only after the pixel ratio change
@@ -536,6 +537,7 @@ export function mountTerminal(
 
   return {
     refit,
+    setAppearance,
     openDevice,
     openHost,
     discard,
