@@ -199,7 +199,7 @@ fi
 # 提示符：已经有颜色或在用 starship、powerline 等框架时不改。
 __mt_prompt=1
 __mt_esc=$(printf '\033')
-case ${PS1-} in *'\e['* | *'\033['* | *'\E['* | *'\x1b['* | *"$__mt_esc["*) __mt_prompt= ;; esac
+case ${PS1-} in *'\e['* | *'\033['* | *'\E['* | *'\x1b['* | *"${__mt_esc}["*) __mt_prompt= ;; esac
 case ${PROMPT_COMMAND-} in *starship* | *powerline* | *_omb_* | *liquidprompt* | *__git_ps1*) __mt_prompt= ;; esac
 [ -n "${STARSHIP_SHELL-}" ] && __mt_prompt=
 if [ -n "$__mt_prompt" ]; then
@@ -243,7 +243,7 @@ fi
   local esc=$'\e'
   [[ -n ${ZSH-} || -n ${ZPREZTODIR-} || -n ${ZSH_THEME-} || -n ${STARSHIP_SHELL-} ]] && return
   (( $+functions[p10k] || $+functions[prompt_powerlevel10k_setup] )) && return
-  [[ $PROMPT == *'%F{'* || $PROMPT == *'%K{'* || $PROMPT == *'%{'* || $PROMPT == *"$esc["* ]] && return
+  [[ $PROMPT == *'%F{'* || $PROMPT == *'%K{'* || $PROMPT == *'%{'* || $PROMPT == *"${esc}["* ]] && return
   PROMPT='%B%F{green}%n@%m%f%b:%B%F{blue}%~%f%b%# '
 }
 

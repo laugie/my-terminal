@@ -230,7 +230,10 @@ mod script {
         fs::write(home.file(".zshrc"), "PROMPT='%m%# '\n").unwrap();
         run(&home, "/bin/zsh", "auto");
         let (stdout, stderr) = interactive("/bin/zsh", &home, "alias ls; print -r -- \"CLICOLOR=${CLICOLOR-}\"; print -r -- \"P=$PROMPT\"");
-        assert!(!stderr.contains("colors.zsh"), "{stderr}");
+        // Errors inside the prompt function are reported as "(anon):N: ...".
+        for marker in ["colors.zsh", "(anon)", "invalid subscript", "parse error"] {
+            assert!(!stderr.contains(marker), "{stderr}");
+        }
         assert!(stdout.contains("--color=auto") || stdout.contains("CLICOLOR=1"), "{stdout}");
         assert!(stdout.contains("P=%B%F{green}"), "{stdout}");
     }
