@@ -157,14 +157,17 @@ fn build_relay(
     if !shell_name_ok(&via.user) || !shell_name_ok(&via.host) {
         return Err("跳板机参数不能用于中转命令".to_string());
     }
-    let expanded = expand_relay_template(&connection.command, &device.host, device.port)?;
+    // One target for the template, the outer ssh, and failure hints.
+    let target_host = connection.host.as_deref().unwrap_or(device.host.as_str());
+    let target_port = connection.port.unwrap_or(device.port);
+    let expanded = expand_relay_template(&connection.command, target_host, target_port)?;
     let escaped = escape_percents(&expanded);
     let program = proxy_program(&resolve_ssh_binary()?)?;
     let proxy = assemble_proxy(&program, via, &escaped)?;
     let mut args = build_ssh_args_with_options(&SshOptions {
-        host: device.host.clone(),
+        host: target_host.to_string(),
         user: Some(device.user.clone()),
-        port: Some(device.port),
+        port: Some(target_port),
         identity_path: device.identity_file.clone(),
         jump: None,
     })?;
@@ -177,7 +180,7 @@ fn build_relay(
     let ends = RelayEnds {
         via_host: via.host.clone(),
         via_user: via.user.clone(),
-        target_host: device.host.clone(),
+        target_host: target_host.to_string(),
         target_user: device.user.clone(),
     };
     Ok((args, ends))
@@ -257,7 +260,7 @@ fn escape_percents(text: &str) -> String {
     out
 }
 
-fn shell_safe_host(host: &str) -> bool {
+pub(crate) fn shell_safe_host(host: &str) -> bool {
     !host.is_empty()
         && !host.starts_with('-')
         && host
@@ -581,6 +584,25 @@ mod tests {
         assert!(relay
             .iter()
             .any(|arg| { arg.ends_with(" -- jump.example.com tailscale nc app.example.com 22") }));
+        let nas = ssh_args_for_connection(&topology, "内网服务器", Some("经 NAS")).unwrap();
+        assert!(nas
+            .iter()
+            .any(|arg| { arg.ends_with(" -- 192.0.2.5 tailscale nc 192.0.2.50 22") }));
+        assert_eq!(nas.last().map(String::as_str), Some("192.0.2.50"));
+    }
+
+    #[test]
+    fn connection_host_names_the_target_in_failure_hints() {
+        let topology = parse_topology(
+            r#"{"regions":[{"name":"r","devices":[
+            {"name":"nas","host":"nas.example.com","user":"me"},
+            {"name":"t","host":"192.0.2.30","user":"ops","connections":[
+              {"name":"经 NAS","via":"nas","command":"tailscale nc %h %p","host":"192.0.2.99"}]}]}]}"#,
+        )
+        .unwrap();
+        let (_, relay_ends) = prepare_relay(&topology, "t", "经 NAS").unwrap();
+        assert_eq!(relay_ends.target_host, "192.0.2.99");
+        assert_eq!(relay_ends.via_host, "nas.example.com");
     }
 
     #[test]
