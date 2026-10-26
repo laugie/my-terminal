@@ -37,6 +37,10 @@ pub struct RelayConnection {
     pub name: String,
     pub via: String,
     pub command: String,
+    /// Target host for this route only. None uses the device `host`.
+    pub host: Option<String>,
+    /// Target port for this route only. None uses the device `port`.
+    pub port: Option<u16>,
 }
 
 const FILE_LABEL: &str = "topology.json";
@@ -192,7 +196,7 @@ fn parse_connection(value: &Value, region: &str, device: &str) -> Result<RelayCo
     })?;
     warn_unknown(
         object,
-        &["name", "via", "command"],
+        &["name", "via", "command", "host", "port"],
         &format!("区域「{region}」设备「{device}」.connections."),
     );
     let name = require_string(object, "name").map_err(|err| place(region, device, err))?;
@@ -201,7 +205,28 @@ fn parse_connection(value: &Value, region: &str, device: &str) -> Result<RelayCo
     reject_control(&via, "via")?;
     let command = require_string(object, "command").map_err(|err| place(region, device, err))?;
     super::relay::reject_relay_template(&command).map_err(|err| place(region, device, err))?;
-    Ok(RelayConnection { name, via, command })
+    let host = optional_string(object, "host").map_err(|err| place(region, device, err))?;
+    if let Some(host) = &host {
+        reject_control(host, "连接 host").map_err(|err| place(region, device, err))?;
+        if !super::relay::shell_safe_host(host) {
+            return Err(place(
+                region,
+                device,
+                format!("{FILE_LABEL}:1:1 连接「{name}」的 host 只能包含字母、数字和 . - _"),
+            ));
+        }
+    }
+    let port = match object.get("port") {
+        None | Some(Value::Null) => None,
+        value => Some(parse_port(value).map_err(|err| place(region, device, err))?),
+    };
+    Ok(RelayConnection {
+        name,
+        via,
+        command,
+        host,
+        port,
+    })
 }
 
 fn place(region: &str, device: &str, err: String) -> String {

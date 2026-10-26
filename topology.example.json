@@ -39,6 +39,12 @@
               "name": "经跳板命令",
               "via": "跳板机",
               "command": "tailscale nc %h %p"
+            },
+            {
+              "name": "经 NAS",
+              "via": "office-nas",
+              "command": "tailscale nc %h %p",
+              "host": "192.0.2.50"
             }
           ]
         },
