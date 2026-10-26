@@ -1,3 +1,4 @@
+pub mod appearance;
 pub mod auth;
 pub mod config;
 pub mod hosts;
@@ -48,6 +49,8 @@ pub fn run() {
             session::close_session,
             zoom::ui_zoom_load,
             zoom::ui_zoom_set,
+            appearance::appearance_load,
+            appearance::appearance_set,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

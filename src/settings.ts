@@ -1,3 +1,5 @@
+import { ANSI_KEYS, FONTS, THEMES, themeOf, type AppearanceController } from "./appearance.ts";
+import { fontInstalled } from "./appearance-api.ts";
 import { authSetLock, authSettings, authSetup, type LockSettings } from "./auth.ts";
 import { errorText } from "./hosts.ts";
 import { mountCredentialPrompt } from "./login.ts";
@@ -9,13 +11,20 @@ import { zoomLabel, type ZoomController } from "./zoom.ts";
 export interface SettingsPanel {
   /** Show the current zoom level and which steps are possible. */
   renderZoom(): void;
+  /** Show the current terminal theme and font. */
+  renderAppearance(): void;
 }
 
 /**
- * Gear button dialog: UI zoom, and a switch that requires login on the next
- * launch. The button itself is created by the shell so the top bar owns the slot.
+ * Gear button dialog: UI zoom, terminal theme and font, and a switch that
+ * requires login on the next launch. The button itself is created by the
+ * shell so the top bar owns the slot.
  */
-export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): SettingsPanel {
+export function mountSettings(
+  button: HTMLButtonElement,
+  zoom: ZoomController,
+  appearance: AppearanceController,
+): SettingsPanel {
   const slot = button.parentElement;
   if (!(slot instanceof HTMLElement)) {
     throw new Error("missing settings slot");
@@ -97,11 +106,43 @@ export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): 
   const divider = document.createElement("hr");
   divider.className = "settings-divider";
 
+  const themeField = selectField("配色", "settings-theme");
+  for (const theme of THEMES) {
+    themeField.select.append(new Option(theme.label, theme.id));
+  }
+  const swatches = document.createElement("div");
+  swatches.className = "settings-swatches";
+  swatches.setAttribute("aria-hidden", "true");
+  const fontField = selectField("终端字体", "settings-font");
+  const fontOptions = FONTS.map((choice) => {
+    const installed = choice.bundled || fontInstalled(choice.family);
+    const option = new Option(installed ? choice.label : `${choice.label}（未安装）`, choice.id);
+    option.dataset.installed = installed ? "true" : "false";
+    fontField.select.append(option);
+    return option;
+  });
+  const appearanceNotice = document.createElement("p");
+  appearanceNotice.className = "settings-notice";
+  themeField.select.addEventListener("change", () => {
+    void appearance.set({ theme: themeField.select.value });
+  });
+  fontField.select.addEventListener("change", () => {
+    void appearance.set({ font: fontField.select.value });
+  });
+
+  const lookDivider = document.createElement("hr");
+  lookDivider.className = "settings-divider";
+
   dialog.append(
     title,
     zoomRow,
     zoomHint,
     zoomNotice,
+    lookDivider,
+    themeField.row,
+    swatches,
+    fontField.row,
+    appearanceNotice,
     divider,
     row,
     notice,
@@ -112,6 +153,7 @@ export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): 
   );
   slot.append(dialog);
   renderZoom();
+  renderAppearance();
 
   let savedEnabled = false;
   let hasSecret = false;
@@ -247,5 +289,37 @@ export function mountSettings(button: HTMLButtonElement, zoom: ZoomController): 
     zoomNotice.textContent = zoom.message;
   }
 
-  return { renderZoom };
+  function renderAppearance(): void {
+    themeField.select.value = appearance.theme;
+    fontField.select.value = appearance.font;
+    for (const option of fontOptions) {
+      // A missing font stays selectable while it is the saved choice.
+      option.disabled = option.dataset.installed !== "true" && option.value !== appearance.font;
+    }
+    const palette = themeOf(appearance.theme).palette;
+    swatches.style.background = palette.background;
+    swatches.replaceChildren(
+      ...ANSI_KEYS.map((key) => {
+        const chip = document.createElement("span");
+        chip.style.background = palette[key];
+        return chip;
+      }),
+    );
+    appearanceNotice.textContent = appearance.message;
+  }
+
+  return { renderZoom, renderAppearance };
+}
+
+function selectField(caption: string, id: string): { row: HTMLLabelElement; select: HTMLSelectElement } {
+  const row = document.createElement("label");
+  row.className = "settings-field";
+  row.htmlFor = id;
+  const text = document.createElement("span");
+  text.textContent = caption;
+  const select = document.createElement("select");
+  select.id = id;
+  select.className = "settings-select";
+  row.append(text, select);
+  return { row, select };
 }

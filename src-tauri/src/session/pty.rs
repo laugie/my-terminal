@@ -105,6 +105,11 @@ pub(crate) fn start_pty(
 
     let mut command = CommandBuilder::new(program);
     command.args(args);
+    // A GUI launch has no TERM. ssh passes it to the remote side, which turns
+    // off `ls` colors and colored prompts without it. xterm.js draws 256
+    // colors and true color.
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
 
     let system = native_pty_system();
     let pair = system

@@ -34,6 +34,25 @@
 
 缩放比例写在本机 `config.json` 的 `settings.uiZoom`（整数百分比），重启后保持，登录界面也按这个比例显示。100% 时不写这个字段，所以没缩放过的配置文件不变，配置版本号也不变。这个值不在档位上（比如手改成 `112` 或字符串）时按 100% 处理，不会当作配置损坏。配置来自更新版本时，本次仍然缩放，但设置里会提示无法保存。
 
+## 终端配色与字体
+
+终端支持 ANSI 16 色、256 色和真彩色。启动 ssh 时设置 `TERM=xterm-256color` 和 `COLORTERM=truecolor`。从 Finder 或开始菜单启动时 TERM 本来是空的，远端会当作不支持颜色的终端，`ls --color=auto` 和 Debian / Ubuntu 默认的彩色提示符都不会开。`TERM` 会随 ssh 传到远端；`COLORTERM` 只在本机进程里，远端 sshd 默认不接收。
+
+设置里的「配色」可以选内置配色，下面的色块是这套配色的 16 种颜色：
+
+| 配色 | 说明 |
+| --- | --- |
+| 夜幕（默认） | 与界面同色的深色背景，颜色柔和 |
+| 深海 | 深蓝背景，颜色饱和 |
+| One Dark、Dracula、Tokyo Night、Nord、Solarized Dark | 常见深色配色 |
+| 纸白 | 浅色背景，xterm 自动提高过浅文字的对比度 |
+
+每套配色里，`ls` 用来区分文件类型的红、绿、黄、蓝、品红、青六种颜色互不相同，在深色背景上对比度至少 3:1（测试里检查）。
+
+「终端字体」默认用内置的 JetBrains Mono（SIL OFL 1.1，许可证见 [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md)）。也可以选「系统默认」或本机已安装的 SF Mono、Menlo、Cascadia Mono、Consolas、Fira Code、MesloLGS NF；没装的会标「未安装」且不能选。中文按字回退到苹方或微软雅黑。
+
+改配色或字体会立刻作用到所有已打开的标签，终端重新计算行列。选择写在 `config.json` 的 `settings.terminalTheme` 和 `settings.terminalFont`，默认值不写；未知的值按默认处理，不当作配置损坏。
+
 ## 拓扑首页
 
 首页是本机 `topology.json` 的网络拓扑图。它和 `config.json` 在同一目录：

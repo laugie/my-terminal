@@ -163,6 +163,14 @@ impl HostState {
         self.with_store(|store| store.set_ui_zoom(percent))?
     }
 
+    pub fn appearance_view(&self) -> Result<crate::config::AppearanceView, String> {
+        self.with_store(|store| store.appearance_view())
+    }
+
+    pub fn set_appearance(&self, theme: Option<&str>, font: Option<&str>) -> Result<(), String> {
+        self.with_store(|store| store.set_appearance(theme, font))?
+    }
+
     fn with_store<T>(&self, f: impl FnOnce(&mut JsonHostStore) -> T) -> Result<T, String> {
         let mut guard = self
             .store

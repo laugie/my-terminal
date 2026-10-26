@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-appearance-load"
+description = "Enables the appearance_load command without any pre-configured scope."
+commands.allow = ["appearance_load"]
+
+[[permission]]
+identifier = "allow-appearance-set"
+description = "Enables the appearance_set command without any pre-configured scope."
+commands.allow = ["appearance_set"]

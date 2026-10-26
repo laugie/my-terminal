@@ -646,6 +646,8 @@ body {
   border: 1px solid var(--border-strong);
   border-radius: 12px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
 }
 
 .settings-switch {
@@ -689,6 +691,47 @@ body {
   min-width: 3.5em;
   text-align: center;
   font-variant-numeric: tabular-nums;
+}
+
+.settings-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.settings-select {
+  min-width: 0;
+  flex: 0 1 190px;
+  min-height: 30px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font: inherit;
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.settings-swatches {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  margin-top: 8px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-swatches span {
+  height: 12px;
+  border-radius: 3px;
 }
 
 .settings-divider {

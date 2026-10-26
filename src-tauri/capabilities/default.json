@@ -19,6 +19,8 @@
     "allow-resize-session",
     "allow-close-session",
     "allow-ui-zoom-load",
-    "allow-ui-zoom-set"
+    "allow-ui-zoom-set",
+    "allow-appearance-load",
+    "allow-appearance-set"
   ]
 }

@@ -1,3 +1,7 @@
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/700.css";
+import { AppearanceController, fontOf, themeOf } from "./appearance.ts";
+import { fontReady, loadAppearance, saveAppearance } from "./appearance-api.ts";
 import {
   addManualHost,
   errorText,
@@ -176,7 +180,29 @@ const zoom = new ZoomController({
     settings.renderZoom();
   },
 });
-const settings = mountSettings(settingsButton, zoom);
+let appearanceRequest = 0;
+const appearance: AppearanceController = new AppearanceController({
+  save: (change) => saveAppearance(change),
+  onChange: () => {
+    settings.renderAppearance();
+    const theme = themeOf(appearance.theme);
+    const font = fontOf(appearance.font);
+    const request = ++appearanceRequest;
+    void fontReady(font.family, font.bundled).then(() => {
+      if (request === appearanceRequest) {
+        terminal.setAppearance(theme, font);
+      }
+    });
+  },
+});
+const settings = mountSettings(settingsButton, zoom, appearance);
+void loadAppearance()
+  .then((view) => {
+    appearance.load(view);
+  })
+  .catch(() => {
+    appearance.load({ theme: appearance.theme, font: appearance.font, readOnly: false });
+  });
 void loadUiZoom()
   .then((view) => {
     zoom.load(view);
