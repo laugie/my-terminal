@@ -40,6 +40,7 @@ try {
     path.join(outDir, "tabs.test.js"),
     path.join(outDir, "connection-menu.test.js"),
     path.join(outDir, "close-confirm.test.js"),
+    path.join(outDir, "zoom.test.js"),
   ]);
 } finally {
   await rm(outDir, { recursive: true, force: true });

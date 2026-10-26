@@ -108,7 +108,33 @@ test("shortcuts: mac uses Cmd, Windows uses Ctrl; 9 = last", () => {
   assert.deepEqual(shortcutAction(k("W", { ctrlKey: true, shiftKey: true }), "windows"), { type: "close" });
   assert.equal(shortcutAction(k("1", { metaKey: true }), "windows"), null, "Windows 上 Win 键不处理");
   assert.equal(shortcutAction(k("1", { ctrlKey: true, altKey: true }), "windows"), null, "AltGr 不触发");
-  assert.equal(shortcutAction(k("0", { metaKey: true }), "mac"), null);
+  assert.deepEqual(shortcutAction(k("0", { metaKey: true }), "mac"), { type: "zoom", step: "reset" }, "#33 Cmd+0 恢复 100%");
+});
+
+test("#33 zoom: Cmd/Ctrl + = / - / 0, with Shift and numpad variants", () => {
+  type Mods = Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; isComposing: boolean; code: string }>;
+  const k = (key: string, m: Mods) =>
+    ({ key, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false, ...m });
+  const zin = { type: "zoom", step: "in" };
+  const zout = { type: "zoom", step: "out" };
+  const zreset = { type: "zoom", step: "reset" };
+  for (const [platform, mod] of [["mac", { metaKey: true }], ["windows", { ctrlKey: true }]] as const) {
+    assert.deepEqual(shortcutAction(k("=", { ...mod, code: "Equal" }), platform), zin, platform);
+    assert.deepEqual(shortcutAction(k("+", { ...mod, shiftKey: true, code: "Equal" }), platform), zin, `${platform} Shift`);
+    assert.deepEqual(shortcutAction(k("+", { ...mod, code: "NumpadAdd" }), platform), zin, `${platform} 小键盘`);
+    assert.deepEqual(shortcutAction(k("-", { ...mod, code: "Minus" }), platform), zout, platform);
+    assert.deepEqual(shortcutAction(k("_", { ...mod, shiftKey: true, code: "Minus" }), platform), zout, `${platform} Shift`);
+    assert.deepEqual(shortcutAction(k("-", { ...mod, code: "NumpadSubtract" }), platform), zout, `${platform} 小键盘`);
+    assert.deepEqual(shortcutAction(k("0", { ...mod, code: "Digit0" }), platform), zreset, platform);
+    assert.deepEqual(shortcutAction(k("0", { ...mod, code: "Numpad0" }), platform), zreset, `${platform} 小键盘`);
+    assert.equal(shortcutAction(k("=", { ...mod, altKey: true, code: "Equal" }), platform), null, `${platform} Alt 不触发`);
+    assert.equal(shortcutAction(k("=", { ...mod, isComposing: true }), platform), null, `${platform} 组字不触发`);
+  }
+  assert.deepEqual(shortcutAction(k("ß", { metaKey: true, code: "Minus" }), "mac"), zout, "按物理键位");
+  assert.equal(shortcutAction(k("=", { ctrlKey: true, code: "Equal" }), "mac"), null, "mac 上 Ctrl+= 留给终端");
+  assert.equal(shortcutAction(k("=", { metaKey: true, code: "Equal" }), "windows"), null, "Windows 上 Win 键不处理");
+  assert.equal(shortcutAction(k("=", { code: "Equal" }), "windows"), null, "不按修饰键不处理");
+  assert.equal(shortcutAction(k("0", { ctrlKey: true, metaKey: true }), "mac"), null);
 });
 
 test("windows Ctrl+F4 closes; bare Ctrl+W and composing do not", () => {
