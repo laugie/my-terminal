@@ -13,6 +13,15 @@ export interface SettingsPanel {
   renderZoom(): void;
   /** Show the current terminal theme and font. */
   renderAppearance(): void;
+  /** Refresh the remote shell row; `status` replaces the last result line. */
+  renderShell(status?: string): void;
+}
+
+/** The remote shell row acts on the active tab's host. */
+export interface ShellActions {
+  /** Title of the active session tab, or null on the home tab. */
+  active(): string | null;
+  run(mode: "apply" | "restore"): Promise<void>;
 }
 
 /**
@@ -24,6 +33,7 @@ export function mountSettings(
   button: HTMLButtonElement,
   zoom: ZoomController,
   appearance: AppearanceController,
+  shell: ShellActions,
 ): SettingsPanel {
   const slot = button.parentElement;
   if (!(slot instanceof HTMLElement)) {
@@ -133,6 +143,59 @@ export function mountSettings(
   const lookDivider = document.createElement("hr");
   lookDivider.className = "settings-divider";
 
+  const shellDivider = document.createElement("hr");
+  shellDivider.className = "settings-divider";
+  const autoRow = document.createElement("label");
+  autoRow.className = "settings-switch";
+  const autoBox = document.createElement("input");
+  autoBox.type = "checkbox";
+  const autoCaption = document.createElement("span");
+  autoCaption.textContent = "连接后自动美化远端 Shell";
+  autoRow.append(autoBox, autoCaption);
+  const shellHelp = document.createElement("p");
+  shellHelp.className = "settings-help";
+  shellHelp.textContent =
+    "先备份 ~/.bashrc 或 ~/.zshrc，再加入 ls 颜色、彩色提示符和 zsh 语法高亮；已有彩色提示符或主题框架时不覆盖。需要能用密钥或 ssh-agent 免交互登录。";
+  const shellRow = document.createElement("div");
+  shellRow.className = "settings-shell";
+  const shellTarget = document.createElement("span");
+  shellTarget.className = "settings-shell-target";
+  const applyButton = document.createElement("button");
+  applyButton.type = "button";
+  applyButton.className = "button";
+  applyButton.textContent = "立即美化";
+  const restoreButton = document.createElement("button");
+  restoreButton.type = "button";
+  restoreButton.className = "button ghost";
+  restoreButton.textContent = "恢复备份";
+  const shellButtons = document.createElement("div");
+  shellButtons.className = "settings-shell-buttons";
+  shellButtons.append(applyButton, restoreButton);
+  shellRow.append(shellTarget, shellButtons);
+  const shellStatus = document.createElement("p");
+  shellStatus.className = "settings-shell-status";
+  shellStatus.setAttribute("aria-live", "polite");
+  let shellBusy = false;
+  autoBox.addEventListener("change", () => {
+    void appearance.set({ autoBeautify: autoBox.checked });
+  });
+  for (const [button, mode] of [
+    [applyButton, "apply"],
+    [restoreButton, "restore"],
+  ] as const) {
+    button.addEventListener("click", () => {
+      if (shellBusy || shell.active() === null) {
+        return;
+      }
+      shellBusy = true;
+      renderShell(mode === "apply" ? "正在美化…" : "正在恢复…");
+      void shell.run(mode).finally(() => {
+        shellBusy = false;
+        renderShell();
+      });
+    });
+  }
+
   dialog.append(
     title,
     zoomRow,
@@ -143,6 +206,11 @@ export function mountSettings(
     swatches,
     fontField.row,
     appearanceNotice,
+    shellDivider,
+    autoRow,
+    shellHelp,
+    shellRow,
+    shellStatus,
     divider,
     row,
     notice,
@@ -154,6 +222,7 @@ export function mountSettings(
   slot.append(dialog);
   renderZoom();
   renderAppearance();
+  renderShell();
 
   let savedEnabled = false;
   let hasSecret = false;
@@ -165,6 +234,7 @@ export function mountSettings(
     if (dialog.hidden) {
       dialog.hidden = false;
       button.setAttribute("aria-expanded", "true");
+      renderShell();
       void refresh();
     } else {
       hide();
@@ -306,9 +376,21 @@ export function mountSettings(
       }),
     );
     appearanceNotice.textContent = appearance.message;
+    autoBox.checked = appearance.autoBeautify;
+    autoBox.disabled = appearance.readOnly;
   }
 
-  return { renderZoom, renderAppearance };
+  function renderShell(status?: string): void {
+    const label = shell.active();
+    shellTarget.textContent = label === null ? "打开一个主机的标签后可手动操作" : `当前标签：${label}`;
+    applyButton.disabled = label === null || shellBusy;
+    restoreButton.disabled = label === null || shellBusy;
+    if (status !== undefined) {
+      shellStatus.textContent = status;
+    }
+  }
+
+  return { renderZoom, renderAppearance, renderShell };
 }
 
 function selectField(caption: string, id: string): { row: HTMLLabelElement; select: HTMLSelectElement } {

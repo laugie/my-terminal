@@ -14,7 +14,9 @@ import { loadTopology, type TopologyView } from "./topology.ts";
 import { renderTopology, syncDeviceOpenState } from "./topology-view.ts";
 import { mountTerminal, type TerminalHost } from "./terminal.ts";
 import { mountTabBar, toolButton, type TabBar } from "./tab-bar.ts";
-import { closeSession } from "./session.ts";
+import { closeSession, sshTargetOf } from "./session.ts";
+import { AutoBeautify, reportMessage, type ShellTarget } from "./remote-shell.ts";
+import { runRemoteShell } from "./remote-shell-api.ts";
 import { askCloseConfirm, closeConfirmOpen, needsCloseConfirm } from "./close-confirm.ts";
 import { sessionLimitMessage, TabStrip, type ShortcutAction } from "./tabs.ts";
 import { authSettings, authStatus, type AuthStateName } from "./auth.ts";
@@ -100,6 +102,8 @@ const tabBar: TabBar = mountTabBar(shell, {
 });
 
 const host: { terminal: TerminalHost | null } = { terminal: null };
+/** Route of each session tab, for the remote shell script. */
+const shellTargets = new Map<string, ShellTarget>();
 const strip: TabStrip = new TabStrip({
   openSession(name: string, connectionName?: string): Promise<{ id: string }> {
     const opener = host.terminal;
@@ -117,6 +121,11 @@ const strip: TabStrip = new TabStrip({
     if (!tab) {
       throw new Error("无法打开标签");
     }
+    shellTargets.set(tab.key, {
+      kind: "device",
+      deviceName: name,
+      ...(connectionName ? { connectionName } : {}),
+    });
     return opener.openDevice(tab.key, name, connectionName);
   },
   closeSession: (id) => closeSession(id),
@@ -134,6 +143,10 @@ const terminal = mountTerminal(terminalPanel, {
   },
   onConnected: (key, id) => {
     strip.onConnected(key, id);
+    const target = shellTargets.get(key);
+    if (target) {
+      void autoBeautify.connected(target, tabTitle(key));
+    }
   },
   onExit: (key, code) => {
     strip.onExit(key, code);
@@ -195,7 +208,29 @@ const appearance: AppearanceController = new AppearanceController({
     });
   },
 });
-const settings = mountSettings(settingsButton, zoom, appearance);
+const autoBeautify = new AutoBeautify({
+  run: (target, mode) => runRemoteShell(target, mode),
+  enabled: () => appearance.autoBeautify,
+  onReport: (label, result, mode) => {
+    const message =
+      result instanceof Error ? `${label}：${result.message}` : reportMessage(result, label);
+    settings.renderShell(message);
+    if (AutoBeautify.notable(result, mode)) {
+      showToast(message);
+    }
+  },
+});
+const settings = mountSettings(settingsButton, zoom, appearance, {
+  active: () => {
+    const tab = strip.tabs.find((item) => item.key === strip.activeKey);
+    return tab && tab.kind === "session" && shellTargets.has(tab.key) ? tab.title : null;
+  },
+  run: (mode) => {
+    const key = strip.activeKey;
+    const target = shellTargets.get(key);
+    return target ? autoBeautify.run(target, tabTitle(key), mode) : Promise.resolve();
+  },
+});
 void loadAppearance()
   .then((view) => {
     appearance.load(view);
@@ -383,6 +418,7 @@ async function requestClose(key: string): Promise<void> {
     return;
   }
   terminal.discard(key);
+  shellTargets.delete(key);
   strip.close(key);
   present(strip.activeKey);
 }
@@ -426,6 +462,7 @@ async function connectHost(host: HostEntry): Promise<void> {
       if (!tab) {
         throw new Error("无法打开标签");
       }
+      shellTargets.set(tab.key, { kind: "host", ...sshTargetOf(host) });
       return terminal.openHost(tab.key, host);
     });
     present(strip.activeKey);
@@ -709,6 +746,29 @@ function sourceLabel(source: HostEntry["source"]): string {
       return "Tailscale+手动";
   }
 }
+
+function tabTitle(key: string): string {
+  return strip.tabs.find((item) => item.key === key)?.title ?? "";
+}
+
+let toastTimer = 0;
+const toast = el("div", "toast");
+toast.setAttribute("role", "status");
+toast.hidden = true;
+app.append(toast);
+
+/** A short notice that does not move the terminal. Click to dismiss. */
+function showToast(message: string): void {
+  toast.textContent = message;
+  toast.hidden = false;
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    toast.hidden = true;
+  }, 9000);
+}
+toast.addEventListener("click", () => {
+  toast.hidden = true;
+});
 
 function field(
   form: HTMLFormElement,

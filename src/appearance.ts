@@ -322,6 +322,8 @@ function luminance(hex: string): number {
 export interface AppearanceView {
   theme: string;
   font: string;
+  /** Beautify the remote shell after a connection. Missing means on. */
+  autoBeautify?: boolean;
   readOnly: boolean;
   message?: string | null;
 }
@@ -329,16 +331,19 @@ export interface AppearanceView {
 export interface AppearanceChange {
   theme?: string;
   font?: string;
+  autoBeautify?: boolean;
 }
 
 /**
- * The current theme and font for the terminal and the settings rows. Like the
+ * The current theme, font and auto-beautify switch for the terminal and the
+ * settings rows. Like the
  * zoom controller, a change applies at once and saves are queued in order, so
  * an older reply never moves the choice back.
  */
 export class AppearanceController {
   theme = DEFAULT_THEME;
   font = DEFAULT_FONT;
+  autoBeautify = true;
   readOnly = false;
   message = "";
   private chain: Promise<void> = Promise.resolve();
@@ -353,6 +358,7 @@ export class AppearanceController {
   load(view: AppearanceView): void {
     this.theme = themeOf(view.theme).id;
     this.font = fontOf(view.font).id;
+    this.autoBeautify = view.autoBeautify !== false;
     this.readOnly = view.readOnly;
     this.message = view.message ?? "";
     this.deps.onChange?.();
@@ -366,11 +372,15 @@ export class AppearanceController {
     if (change.font !== undefined && FONTS.some((choice) => choice.id === change.font) && change.font !== this.font) {
       next.font = change.font;
     }
-    if (next.theme === undefined && next.font === undefined) {
+    if (change.autoBeautify !== undefined && change.autoBeautify !== this.autoBeautify) {
+      next.autoBeautify = change.autoBeautify;
+    }
+    if (next.theme === undefined && next.font === undefined && next.autoBeautify === undefined) {
       return this.chain;
     }
     this.theme = next.theme ?? this.theme;
     this.font = next.font ?? this.font;
+    this.autoBeautify = next.autoBeautify ?? this.autoBeautify;
     this.deps.onChange?.();
     this.chain = this.chain.then(async () => {
       try {

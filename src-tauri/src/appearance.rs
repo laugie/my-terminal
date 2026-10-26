@@ -1,5 +1,5 @@
-//! Terminal theme and font. The frontend applies them; this only keeps the
-//! choice in `config.json`.
+//! Terminal theme, font and the auto-beautify switch. The frontend applies
+//! them; this only keeps the choice in `config.json`.
 
 use tauri::Manager;
 
@@ -18,10 +18,17 @@ pub async fn appearance_set(
     app: tauri::AppHandle,
     theme: Option<String>,
     font: Option<String>,
+    auto_beautify: Option<bool>,
 ) -> Result<AppearanceView, String> {
     let (saved, view) = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<HostState>();
-        let saved = state.set_appearance(theme.as_deref(), font.as_deref());
+        let mut saved = Ok(());
+        if theme.is_some() || font.is_some() {
+            saved = state.set_appearance(theme.as_deref(), font.as_deref());
+        }
+        if let Some(enabled) = auto_beautify.filter(|_| saved.is_ok()) {
+            saved = state.set_auto_beautify(enabled);
+        }
         (saved, state.appearance_view())
     })
     .await

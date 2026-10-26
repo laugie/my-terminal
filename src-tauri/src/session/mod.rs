@@ -306,28 +306,7 @@ pub async fn open_session(
         crate::auth::require_access(&auth, auth.lock_enabled())
     }
     .map_err(|err| err.to_string())?;
-    let connection_name = connection_name.filter(|name| !name.is_empty());
-    let mut planned = if let Some(device_name) = device_name.filter(|name| !name.is_empty()) {
-        let app_for_load = app.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            let dir = crate::config::resolve_app_config_dir(&app_for_load)
-                .map_err(|_| "无法定位配置目录".to_string())?;
-            crate::topology::plan_device_session_with(
-                &dir,
-                &device_name,
-                connection_name.as_deref(),
-            )
-        })
-        .await
-        .map_err(|_| "读取拓扑配置失败".to_string())??
-    } else {
-        let host = host.ok_or_else(|| "主机不能为空".to_string())?;
-        crate::topology::SessionPlan {
-            args: build_ssh_args(&SshTarget { host, user, port })?,
-            temp_file: None,
-            relay: None,
-        }
-    };
+    let mut planned = plan_session(&app, host, user, port, device_name, connection_name).await?;
     let args = std::mem::take(&mut planned.args);
     let mut temp_file = planned.temp_file.take();
     let relay_ends = planned.relay.take();
@@ -415,6 +394,39 @@ pub async fn open_session(
         }
         Err(_) => Err("启动会话失败".to_string()),
     }
+}
+
+/// ssh arguments for a topology device (by name) or a direct host. A request
+/// that sets `device_name` ignores `host` / `user` / `port`.
+pub(crate) async fn plan_session(
+    app: &tauri::AppHandle,
+    host: Option<String>,
+    user: Option<String>,
+    port: Option<u16>,
+    device_name: Option<String>,
+    connection_name: Option<String>,
+) -> Result<crate::topology::SessionPlan, String> {
+    let connection_name = connection_name.filter(|name| !name.is_empty());
+    if let Some(device_name) = device_name.filter(|name| !name.is_empty()) {
+        let app_for_load = app.clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            let dir = crate::config::resolve_app_config_dir(&app_for_load)
+                .map_err(|_| "无法定位配置目录".to_string())?;
+            crate::topology::plan_device_session_with(
+                &dir,
+                &device_name,
+                connection_name.as_deref(),
+            )
+        })
+        .await
+        .map_err(|_| "读取拓扑配置失败".to_string())?;
+    }
+    let host = host.ok_or_else(|| "主机不能为空".to_string())?;
+    Ok(crate::topology::SessionPlan {
+        args: build_ssh_args(&SshTarget { host, user, port })?,
+        temp_file: None,
+        relay: None,
+    })
 }
 
 /// Write raw input to the session. The bytes are not stored.

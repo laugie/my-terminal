@@ -169,3 +169,28 @@ fn newer_config_is_read_only() {
     assert!(store.set_appearance(Some("dracula"), None).is_err());
     assert_eq!(config_text(&dir), text, "不改更新版本的文件");
 }
+
+#[test]
+fn auto_beautify_is_on_unless_false_is_written() {
+    let dir = TempDir::new("auto");
+    with_host(&dir);
+    let before = config_text(&dir);
+    let mut store = JsonHostStore::open(&dir);
+    assert!(store.appearance_view().auto_beautify, "默认开启");
+    store.set_auto_beautify(false).unwrap();
+    assert!(config_text(&dir).contains("\"autoBeautify\": false"));
+    assert!(!JsonHostStore::open(&dir).appearance_view().auto_beautify);
+    store.set_auto_beautify(true).unwrap();
+    assert_eq!(config_text(&dir), before, "开启时不写字段");
+
+    for other in ["true", "0", "\"no\"", "null"] {
+        fs::write(
+            dir.join("config.json"),
+            format!(r#"{{"version":1,"manualHosts":[],"settings":{{"autoBeautify":{other}}}}}"#),
+        )
+        .unwrap();
+        let config = load_config(&dir).unwrap();
+        assert_eq!(config.notice, None, "{other}");
+        assert!(JsonHostStore::open(&dir).appearance_view().auto_beautify, "{other}");
+    }
+}

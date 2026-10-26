@@ -143,6 +143,14 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     pub terminal_font: Option<String>,
+    /// Beautify the remote shell after a connection. On unless this is
+    /// `false`; only `false` is written.
+    #[serde(
+        default,
+        deserialize_with = "lenient_off",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_beautify: Option<bool>,
 }
 
 /// A value off the zoom ladder is read as 100%. It must not fail the whole
@@ -171,6 +179,15 @@ where
     D: serde::Deserializer<'de>,
 {
     lenient_choice(deserializer, &TERMINAL_FONTS)
+}
+
+/// Only a JSON `false` turns a default-on switch off; anything else is on.
+fn lenient_off<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok((value == serde_json::Value::Bool(false)).then_some(false))
 }
 
 fn lenient_choice<'de, D>(deserializer: D, choices: &[&str]) -> Result<Option<String>, D::Error>
@@ -476,6 +493,7 @@ pub struct ZoomView {
 pub struct AppearanceView {
     pub theme: String,
     pub font: String,
+    pub auto_beautify: bool,
     pub read_only: bool,
     pub message: Option<String>,
 }
@@ -597,6 +615,7 @@ impl JsonHostStore {
                 .terminal_font
                 .clone()
                 .unwrap_or_else(|| TERMINAL_FONTS[0].to_string()),
+            auto_beautify: settings.auto_beautify != Some(false),
             read_only: self.config.read_only,
             message: if self.config.read_only {
                 self.config.write_error.clone()
@@ -624,6 +643,17 @@ impl JsonHostStore {
         if let Some(id) = font {
             next.settings.terminal_font = (id != TERMINAL_FONTS[0]).then(|| id.to_string());
         }
+        next.version = CONFIG_VERSION;
+        self.persist(&next)?;
+        self.config = next;
+        Ok(())
+    }
+
+    /// On is the default and removes the field.
+    pub fn set_auto_beautify(&mut self, enabled: bool) -> Result<(), String> {
+        self.ensure_writable()?;
+        let mut next = self.config.clone();
+        next.settings.auto_beautify = (!enabled).then_some(false);
         next.version = CONFIG_VERSION;
         self.persist(&next)?;
         self.config = next;

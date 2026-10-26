@@ -53,6 +53,29 @@
 
 改配色或字体会立刻作用到所有已打开的标签，终端重新计算行列。选择写在 `config.json` 的 `settings.terminalTheme` 和 `settings.terminalFont`，默认值不写；未知的值按默认处理，不当作配置损坏。
 
+## 远端 Shell 美化
+
+默认开启，在设置里可以关掉（「连接后自动美化远端 Shell」，关闭时写入 `settings.autoBeautify: false`）。开启时，标签第一次连上某台主机后，应用在后台另开一条 ssh 连接，走与标签相同的路线（直连、ProxyJump 或中转），执行一段固定脚本。每台主机每次启动应用只执行一次。脚本内容见 `src-tauri/src/remote_shell/beautify.sh`，不会拼接配置或界面里的任何文字。
+
+脚本做的事：
+
+1. 只处理登录 shell 为 bash 或 zsh 的主机，其他 shell 不动。
+2. 改任何文件之前，先把原文件复制到远端 `~/.my-terminal/backups/<文件名>.<时间>`，原来没有这个文件时记一个 `.absent` 标记。已有的备份不会被覆盖。
+3. 在 `~/.bashrc` 或 `~/.zshrc` 末尾追加一个带标记的段落（`# >>> my-terminal shell colors >>>`），只在文件可读时加载 `~/.my-terminal/colors.bash` 或 `colors.zsh`。bash 的登录配置（`~/.bash_profile` 等）不读取 `~/.bashrc` 时，同样的段落也加到这个文件里。已经有段落时不再改 rc 文件，只更新 `colors.*`。
+4. `colors.*` 只在交互式 shell 里生效，`TERM` 为空或 `dumb` 时不做事，加载两次也只生效一次。具体内容：
+   - `ls`：GNU 系统用 `dircolors` 生成 `LS_COLORS`，目录、可执行文件、链接、压缩包、图片等颜色各不相同；BSD 和 macOS 用 `CLICOLOR`。已有的 `LS_COLORS` 和 `ls`、`grep` 别名不动。
+   - 提示符：改成彩色。提示符本来就带颜色，或者在用 oh-my-zsh、prezto、powerlevel10k、starship、powerline 时保持原样。
+   - zsh 语法高亮：有系统或 Homebrew 安装的 zsh-syntax-highlighting 就直接用；没有时用远端的 git 下载固定版本 0.8.0 到 `~/.my-terminal`。下载失败后，自动执行不再重试，「立即美化」会重试。
+
+改动在下次登录时生效，已经打开的标签不变。第一次改动成功时，窗口右下角提示改了哪些文件、备份在哪里。
+
+设置里的「立即美化」和「恢复备份」作用于当前标签的主机：
+
+- 「恢复备份」：rc 文件在美化之后没改过时，逐字节恢复成备份；改过时只删掉 my-terminal 段落，保留其余改动，备份留在原处。同时删除 `colors.*` 和下载的语法高亮，并记下这台主机不再自动美化。
+- 「立即美化」：清除上面的记录，重新美化。
+
+后台连接使用 `BatchMode=yes`，需要能用密钥或 ssh-agent 免交互登录。只能手动输入凭据的主机会直接失败，并在设置里显示原因，终端会话不受影响。
+
 ## 拓扑首页
 
 首页是本机 `topology.json` 的网络拓扑图。它和 `config.json` 在同一目录：

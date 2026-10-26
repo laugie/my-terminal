@@ -10,6 +10,7 @@ export function saveAppearance(change: AppearanceChange): Promise<AppearanceView
   return invoke<AppearanceView>("appearance_set", {
     theme: change.theme ?? null,
     font: change.font ?? null,
+    autoBeautify: change.autoBeautify ?? null,
   });
 }
 
