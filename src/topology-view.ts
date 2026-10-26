@@ -19,6 +19,8 @@ export function renderTopology(
     onConnect(name: string, connectionName?: string | null): void;
     activeName: string | null;
     canOpen: boolean;
+    /** Available width in CSS pixels; the diagram is laid out to fill it. */
+    width?: number;
   },
 ): void {
   closeMenu?.();
@@ -39,7 +41,7 @@ export function renderTopology(
   }
 
   const scroll = el("div", "diagram-scroll");
-  scroll.innerHTML = renderDiagramSvg(buildDiagram(view), { canOpen: actions.canOpen });
+  scroll.innerHTML = renderDiagramSvg(buildDiagram(view, { width: actions.width }), { canOpen: actions.canOpen });
   for (const node of scroll.querySelectorAll<SVGElement>(".device")) {
     const name = node.dataset.deviceName ?? "";
     if (name === actions.activeName) {
