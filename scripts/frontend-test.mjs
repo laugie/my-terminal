@@ -43,6 +43,7 @@ try {
     path.join(outDir, "zoom.test.js"),
     path.join(outDir, "appearance.test.js"),
     path.join(outDir, "remote-shell.test.js"),
+    path.join(outDir, "planets.test.js"),
   ]);
 } finally {
   await rm(outDir, { recursive: true, force: true });

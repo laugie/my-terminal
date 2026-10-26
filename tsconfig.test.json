@@ -29,6 +29,7 @@
     "src/close-confirm.test.ts",
     "src/zoom.test.ts",
     "src/appearance.test.ts",
-    "src/remote-shell.test.ts"
+    "src/remote-shell.test.ts",
+    "src/planets.test.ts"
   ]
 }
