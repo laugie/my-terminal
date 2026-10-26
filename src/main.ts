@@ -11,6 +11,7 @@ import { renderTopology, syncDeviceOpenState } from "./topology-view.ts";
 import { mountTerminal, type TerminalHost } from "./terminal.ts";
 import { mountTabBar, toolButton, type TabBar } from "./tab-bar.ts";
 import { closeSession } from "./session.ts";
+import { askCloseConfirm, closeConfirmOpen, needsCloseConfirm } from "./close-confirm.ts";
 import { sessionLimitMessage, TabStrip, type ShortcutAction } from "./tabs.ts";
 import { authSettings, authStatus, type AuthStateName } from "./auth.ts";
 import { mountLogin } from "./login.ts";
@@ -82,7 +83,7 @@ const tabBar: TabBar = mountTabBar(shell, {
     present(key);
   },
   onClose: (key) => {
-    requestClose(key);
+    void requestClose(key);
   },
   onNew: () => {
     focusHome();
@@ -135,13 +136,19 @@ const terminal = mountTerminal(terminalPanel, {
     strip.onFailed(key, message);
   },
   onShortcut: (action) => {
-    applyShortcut(action);
+    if (!closeConfirmOpen()) {
+      applyShortcut(action);
+    }
   },
   onNew: () => {
-    focusHome();
+    if (!closeConfirmOpen()) {
+      focusHome();
+    }
   },
   onCycle: (step) => {
-    cycleTab(step);
+    if (!closeConfirmOpen()) {
+      cycleTab(step);
+    }
   },
 });
 host.terminal = terminal;
@@ -290,7 +297,7 @@ function present(key: string): void {
 
 function applyShortcut(action: ShortcutAction): void {
   if (action.type === "close") {
-    requestClose(strip.activeKey);
+    void requestClose(strip.activeKey);
     return;
   }
   strip.jump(action.index);
@@ -306,15 +313,19 @@ function cycleTab(step: number): void {
   }
 }
 
-function requestClose(key: string): void {
+async function requestClose(key: string): Promise<void> {
+  if (closeConfirmOpen()) {
+    return;
+  }
   const tab = strip.tabs.find((item) => item.key === key);
   if (!tab || tab.kind !== "session") {
     return;
   }
-  if (
-    (tab.status === "connecting" || tab.status === "connected") &&
-    !window.confirm("结束该会话？")
-  ) {
+  if (needsCloseConfirm(tab.status) && !(await askCloseConfirm(tab.title))) {
+    present(strip.activeKey);
+    return;
+  }
+  if (!strip.tabs.some((item) => item.key === key)) {
     return;
   }
   terminal.discard(key);

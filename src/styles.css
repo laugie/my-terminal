@@ -778,6 +778,43 @@ body {
   color: var(--text-faint);
 }
 
+.close-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 72px 16px 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.close-confirm {
+  width: min(360px, 100%);
+  padding: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.close-confirm-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.close-confirm-message {
+  margin: 0 0 16px;
+  color: var(--text-muted);
+}
+
+.close-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* Topology diagram */
 
 .diagram-scroll {
