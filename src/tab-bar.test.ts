@@ -1,6 +1,6 @@
-// #39 前端失败测试：「+」要紧跟最后一个标签。macOS WKWebView 按标签的 flex-basis（200px）
-// 计算标签栏宽度，而标签实际按内容宽度显示，于是「+」和标签之间留出一段空白。
-// 标签宽度改为由内容决定、最多 200px，任何引擎算出的标签栏宽度都等于标签实际宽度。
+// #39 前端失败测试：「+」要紧跟最后一个标签。Chromium 里复现不出来；推测是 macOS WKWebView
+// 按标签的 flex-basis（200px）计算标签栏宽度，而标签实际按内容宽度显示，于是「+」和标签之间
+// 留出一段空白。标签宽度改为由内容决定、最多 200px，任何引擎算出的标签栏宽度都等于标签实际宽度。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
