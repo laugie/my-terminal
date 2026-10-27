@@ -32,6 +32,7 @@
     "src/remote-shell.test.ts",
     "src/planets.test.ts",
     "src/label-layout.test.ts",
-    "src/quit-confirm.test.ts"
+    "src/quit-confirm.test.ts",
+    "src/tab-bar.test.ts"
   ]
 }

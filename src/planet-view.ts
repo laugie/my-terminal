@@ -44,7 +44,8 @@ import { bindDeviceActivation } from "./diagram.ts";
 import { placeLabels, type LabelBox, type LabelSlot } from "./label-layout.ts";
 import {
   buildPlanets,
-  cameraDistance,
+  frameCamera,
+  labelScale,
   linkCurve,
   presenceColor,
   ringPoint,
@@ -135,7 +136,12 @@ export function mountPlanetView(
   controls.autoRotate = !reducedMotion;
   controls.autoRotateSpeed = 0.35;
   let idleTimer = 0;
+  // Until the user turns or zooms, a resize frames the system again.
+  let userMoved = false;
+  let fitted = 0;
+  let scale = 1;
   controls.addEventListener("start", () => {
+    userMoved = true;
     controls.autoRotate = false;
     window.clearTimeout(idleTimer);
   });
@@ -156,7 +162,6 @@ export function mountPlanetView(
   const previousSlots = new Map<string, LabelSlot>();
   let ownedByContent: Array<{ dispose(): void }> = [];
   scene.add(content);
-  let framed = false;
   let latest: PlanetModel | null = null;
 
   function rebuild(next: TopologyView): void {
@@ -176,9 +181,8 @@ export function mountPlanetView(
     scene.add(content);
     controls.minDistance = 6;
     controls.maxDistance = Math.max(60, model.extent * 6);
-    if (!framed) {
-      framed = true;
-      frame(model);
+    if (!userMoved) {
+      frame(model, azimuth());
     }
     // CSS2DRenderer adds a label to the DOM on its first render in view. The
     // camera frames every planet, so one render now puts all labels in the
@@ -199,13 +203,42 @@ export function mountPlanetView(
     disposeAll(ownedByContent);
   }
 
-  function frame(model: PlanetModel): void {
-    // A little above the orbits, so their planets spread out vertically too.
-    const direction = { x: 0, y: 0.75, z: 1 };
-    const distance = cameraDistance(model, FOV, camera.aspect || 1, direction);
-    camera.position.set(direction.x, direction.y, direction.z).normalize().multiplyScalar(distance);
-    controls.target.set(0, 0, 0);
+  /** Show the whole system as large as the stage allows, turned `turn` about the sun. */
+  function frame(model: PlanetModel, turn = 0): void {
+    const fit = frameCamera(model, FOV, camera.aspect || 1, { azimuth: turn, labelScale: scale });
+    controls.target.set(fit.target.x, fit.target.y, fit.target.z);
+    camera.position
+      .set(fit.direction.x, fit.direction.y, fit.direction.z)
+      .multiplyScalar(fit.distance)
+      .add(controls.target);
     controls.update();
+    userMoved = false;
+    fitted = fit.distance;
+  }
+
+  /** After a resize: frame again, or keep the user's view and zoom relative to the new fit. */
+  function refit(): void {
+    if (!latest) {
+      return;
+    }
+    if (!userMoved) {
+      frame(latest, azimuth());
+      return;
+    }
+    const fit = frameCamera(latest, FOV, camera.aspect, { azimuth: azimuth(), labelScale: scale });
+    if (fitted > 0) {
+      const offset = camera.position.clone().sub(controls.target).multiplyScalar(fit.distance / fitted);
+      camera.position.copy(controls.target).add(offset);
+      controls.update();
+    }
+    fitted = fit.distance;
+  }
+
+  /** Current turn of the camera about the vertical axis. */
+  function azimuth(): number {
+    const x = camera.position.x - controls.target.x;
+    const z = camera.position.z - controls.target.z;
+    return x === 0 && z === 0 ? 0 : Math.atan2(x, z);
   }
 
   function drawRings(model: PlanetModel): void {
@@ -431,6 +464,9 @@ export function mountPlanetView(
     labels.setSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
+    scale = labelScale(width, height);
+    stage.style.setProperty("--planet-scale", scale.toFixed(3));
+    refit();
   }
   const observer = new ResizeObserver(() => {
     resize();
@@ -617,7 +653,7 @@ function planetLabel(planet: Planet): HTMLElement {
 
 function sun(glow: Texture, owned: Array<{ dispose(): void }>): Object3D {
   const group = new Group();
-  const geometry = new SphereGeometry(2.2, 48, 32);
+  const geometry = new SphereGeometry(2.5, 48, 32);
   const material = new MeshBasicMaterial({ color: 0xffd27a });
   const haloMaterial = new SpriteMaterial({
     map: glow,
@@ -630,7 +666,7 @@ function sun(glow: Texture, owned: Array<{ dispose(): void }>): Object3D {
   owned.push(geometry, material, haloMaterial);
   group.add(new Mesh(geometry, material));
   const halo = new Sprite(haloMaterial);
-  halo.scale.setScalar(16);
+  halo.scale.setScalar(18);
   group.add(halo);
   return group;
 }
