@@ -46,6 +46,7 @@ try {
     path.join(outDir, "planets.test.js"),
     path.join(outDir, "label-layout.test.js"),
     path.join(outDir, "quit-confirm.test.js"),
+    path.join(outDir, "tab-bar.test.js"),
   ]);
 } finally {
   await rm(outDir, { recursive: true, force: true });
