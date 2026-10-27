@@ -40,4 +40,20 @@ while IFS= read -r -d '' file; do
     fail=1
   fi
 done < <(find src-tauri/src src -type f -print0)
+# #41 应用版本号统一为 1.0.N，与安装包文件名 V1.0.N 对应。
+python3 - <<'PY' || fail=1
+import json,re,sys
+versions={
+  "package.json": json.load(open("package.json"))["version"],
+  "package-lock.json": json.load(open("package-lock.json"))["version"],
+  "package-lock.json packages[\"\"]": json.load(open("package-lock.json"))["packages"][""]["version"],
+  "src-tauri/tauri.conf.json": json.load(open("src-tauri/tauri.conf.json"))["version"],
+  "src-tauri/Cargo.toml": re.search(r'(?m)^version = "([^"]+)"', open("src-tauri/Cargo.toml").read()).group(1),
+  "src-tauri/Cargo.lock": re.search(r'name = "my-terminal"\nversion = "([^"]+)"', open("src-tauri/Cargo.lock").read()).group(1),
+}
+bad=[f"{k}={v}" for k,v in versions.items() if not re.fullmatch(r"1\.0\.\d+", v)]
+if bad: print("FAIL: 版本号不是 1.0.N", bad)
+if len(set(versions.values()))!=1: print("FAIL: 版本号不一致", versions); sys.exit(1)
+sys.exit(1 if bad else 0)
+PY
 [ $fail = 0 ] && echo "PASS: repo checks"; exit $fail
