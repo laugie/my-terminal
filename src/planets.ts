@@ -64,22 +64,22 @@ export const KIND_COLORS: Readonly<Record<DeviceKind, string>> = {
  * are the usual jump hosts, mobile devices are rarely used.
  */
 const KIND_SIZES: Readonly<Record<DeviceKind, number>> = {
-  cloud: 2.6,
-  router: 2.1,
-  server: 1.8,
-  nas: 1.75,
-  mac: 1.55,
-  windows: 1.55,
-  generic: 1.5,
+  cloud: 3,
+  router: 2.4,
+  server: 2.1,
+  nas: 2,
+  mac: 1.8,
+  windows: 1.8,
+  generic: 1.75,
 };
-const MOBILE_SIZE = 1.05;
+const MOBILE_SIZE = 1.25;
 
 const RING_COLORS = ["#79a8ff", "#56c2d6", "#c99cf0", "#e6c07b", "#8fd18a", "#f2777a"];
 
 /** Innermost orbit, gap between orbits, and arc length per planet on an orbit. */
-const FIRST_RADIUS = 16;
-const RING_GAP = 12;
-const SPACING = 11;
+const FIRST_RADIUS = 20;
+const RING_GAP = 15;
+const SPACING = 14;
 const MAX_TILT = 0.45;
 /** Phases tried per orbit when staggering it against the inner ones. */
 const PHASE_STEPS = 24;
@@ -223,39 +223,137 @@ export function presenceColor(presence: Presence): string | null {
   }
 }
 
-/** Room kept around each planet for its name label, in world units. */
+/** Room kept around each planet for its name label, in world units, at label scale 1. */
 const LABEL_ROOM = 3;
+/** Share of the half-height and half-width the system may fill. */
+const FILL = 0.95;
+/** Camera heights tried, in degrees above the orbits: lower ones flatten the orbits for wide windows. */
+const LOWEST = 22;
+const HIGHEST = 37;
+/** A higher camera separates near and far planets, so it wins unless a lower one is this much closer. */
+const HEIGHT_PREFERENCE = 1.03;
+/** Turns checked so the system stays in view while the camera rotates. */
+const AZIMUTHS = 8;
+const ORBIT_SAMPLES = 24;
+
+export interface CameraFrame {
+  /** From the target toward the camera. */
+  direction: Vec3;
+  distance: number;
+  /** Point the camera looks at and turns about; always on the vertical axis through the sun. */
+  target: Vec3;
+}
 
 /**
- * Distance from the origin, looking from `direction`, at which every orbit
- * and planet (with its label) is inside the view, with a small margin.
+ * Camera that shows the whole system as large as the window allows: the
+ * height above the orbits follows the window shape, the target moves up or
+ * down the sun's axis to centre the system, and every turn about that axis
+ * keeps all orbits, planets and labels in view.
  */
-export function cameraDistance(
+export function frameCamera(
   model: PlanetModel,
   fovDegrees: number,
   aspect: number,
-  direction: Vec3,
-): number {
-  const tanV = Math.tan((fovDegrees * Math.PI) / 360) * 0.9;
+  options: { azimuth?: number; labelScale?: number } = {},
+): CameraFrame {
+  const azimuth = options.azimuth ?? 0;
+  const tanV = Math.tan((fovDegrees * Math.PI) / 360) * FILL;
   const tanH = tanV * aspect;
-  const basis = cameraBasis(direction);
+  const points = framePoints(model, LABEL_ROOM * (options.labelScale ?? 1));
+  const reach = Math.max(1, model.extent);
+
+  let best: { elevation: number; distance: number; targetY: number } | null = null;
+  const fits: Array<{ elevation: number; distance: number; targetY: number }> = [];
+  for (let degrees = LOWEST; degrees <= HIGHEST; degrees += 1) {
+    const elevation = (degrees * Math.PI) / 180;
+    const bases = Array.from({ length: AZIMUTHS }, (_, i) =>
+      cameraBasis(orbitDirection(azimuth + (2 * Math.PI * i) / AZIMUTHS, elevation)),
+    );
+    const distanceAt = (targetY: number) => fitDistance(points, bases, targetY, tanH, tanV);
+    // Coarse scan, then a finer one around the best target height.
+    let targetY = 0;
+    let distance = distanceAt(0);
+    let step = reach / 16;
+    let centre = 0;
+    for (let round = 0; round < 3; round += 1) {
+      for (let k = -8; k <= 8; k += 1) {
+        const y = centre + k * step;
+        const d = distanceAt(y);
+        if (d < distance - 1e-9) {
+          distance = d;
+          targetY = y;
+        }
+      }
+      centre = targetY;
+      step /= 8;
+    }
+    const fit = { elevation, distance, targetY };
+    fits.push(fit);
+    if (!best || distance < best.distance) {
+      best = fit;
+    }
+  }
+  const chosen = best
+    ? fits.reduce((pick, fit) =>
+        fit.distance <= best.distance * HEIGHT_PREFERENCE && fit.elevation > pick.elevation ? fit : pick,
+      )
+    : { elevation: (HIGHEST * Math.PI) / 180, distance: 8, targetY: 0 };
+  return {
+    direction: orbitDirection(azimuth, chosen.elevation),
+    distance: chosen.distance,
+    target: { x: 0, y: chosen.targetY, z: 0 },
+  };
+}
+
+/** Orbit samples and planets, each with the room it needs around it. */
+function framePoints(model: PlanetModel, labelRoom: number): Array<{ point: Vec3; pad: number }> {
   const points: Array<{ point: Vec3; pad: number }> = [];
   for (const ring of model.rings) {
-    for (let i = 0; i < 36; i += 1) {
-      points.push({ point: ringPoint(ring, (i / 36) * Math.PI * 2), pad: 0 });
+    for (let i = 0; i < ORBIT_SAMPLES; i += 1) {
+      points.push({ point: ringPoint(ring, (i / ORBIT_SAMPLES) * Math.PI * 2), pad: 0 });
     }
   }
   for (const planet of model.planets) {
-    points.push({ point: planet.position, pad: planet.radius + LABEL_ROOM });
+    points.push({ point: planet.position, pad: planet.radius + labelRoom });
   }
+  return points;
+}
+
+/** Smallest distance from the target at which every point is in view from every basis. */
+function fitDistance(
+  points: ReadonlyArray<{ point: Vec3; pad: number }>,
+  bases: ReadonlyArray<{ right: Vec3; up: Vec3; forward: Vec3 }>,
+  targetY: number,
+  tanH: number,
+  tanV: number,
+): number {
   let distance = 8;
-  for (const { point, pad } of points) {
-    const x = Math.abs(dot(point, basis.right)) + pad;
-    const y = Math.abs(dot(point, basis.up)) + pad;
-    const z = dot(point, basis.forward);
-    distance = Math.max(distance, z + x / tanH, z + y / tanV);
+  for (const basis of bases) {
+    for (const { point, pad } of points) {
+      const p = { x: point.x, y: point.y - targetY, z: point.z };
+      const x = Math.abs(dot(p, basis.right)) + pad;
+      const y = Math.abs(dot(p, basis.up)) + pad;
+      const z = dot(p, basis.forward);
+      distance = Math.max(distance, z + x / tanH, z + y / tanV);
+    }
   }
   return distance;
+}
+
+/** Unit vector toward a camera turned `azimuth` about the vertical axis, `elevation` above the orbits. */
+function orbitDirection(azimuth: number, elevation: number): Vec3 {
+  return {
+    x: Math.sin(azimuth) * Math.cos(elevation),
+    y: Math.sin(elevation),
+    z: Math.cos(azimuth) * Math.cos(elevation),
+  };
+}
+
+/** Label size for a stage in CSS pixels: 1 up to a laptop screen, 1.15 on a 27-inch display. */
+export function labelScale(width: number, height: number): number {
+  const size = Math.min(width, (height * 16) / 9);
+  const t = Math.min(Math.max((size - 1400) / (2300 - 1400), 0), 1);
+  return 1 + 0.15 * t;
 }
 
 /** Right, up and toward-camera unit vectors for a camera on `direction`. */

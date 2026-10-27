@@ -269,7 +269,8 @@ test("#39 a wide window is filled from side to side", () => {
   assert.ok(fill.inside, "大屏上所有轨道和星球都在画面内");
   // #37 left the outer orbit at about 56% of the half-width; 115% of that is 65%.
   assert.ok(fill.x >= 0.8, `外圈轨道横向占到 ${(fill.x * 100).toFixed(0)}%`);
-  assert.ok(fill.y >= 0.8, `外圈轨道纵向占到 ${(fill.y * 100).toFixed(0)}%`);
+  // Vertically the camera keeps room for the turns where tilted orbits reach higher.
+  assert.ok(fill.y >= 0.7, `外圈轨道纵向占到 ${(fill.y * 100).toFixed(0)}%`);
 });
 
 test("#39 every window shape keeps everything in view while the camera turns", () => {
