@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { topologySessionFields } from "./connection-menu.js";
+import type { DevicePresence } from "./presence.ts";
 import type { SessionEvent } from "./session.ts";
 
 export type Presence = "online" | "offline" | "unknown" | "none";
@@ -47,4 +48,12 @@ export function openTopologyDevice(
     ...topologySessionFields(deviceName, connectionName),
     onEvent: onEventChannel,
   });
+}
+
+/**
+ * One online-state round. The backend reads hosts from topology.json; the page
+ * sends only the names of devices it already has connected tabs for.
+ */
+export function probePresence(connected: string[]): Promise<DevicePresence[]> {
+  return invoke<DevicePresence[]>("probe_presence", { connected });
 }

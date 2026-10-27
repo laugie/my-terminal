@@ -33,6 +33,7 @@
     "src/planets.test.ts",
     "src/label-layout.test.ts",
     "src/quit-confirm.test.ts",
-    "src/tab-bar.test.ts"
+    "src/tab-bar.test.ts",
+    "src/presence.test.ts"
   ]
 }

@@ -277,7 +277,7 @@ function renderNode(node: DiagramNode, index: number, canOpen: boolean): string 
   const presence = presenceMark(node);
   const badge = node.mobile ? mobileBadge(tileX + TILE - 11, tileY - 7) : "";
   return (
-    `<g class="device" role="button" tabindex="0" data-kind="${node.kind}" data-device-name="${name}" aria-label="${label}"${disabled}>` +
+    `<g class="device" role="button" tabindex="0" data-kind="${node.kind}" data-presence="${node.presence}" data-device-name="${name}" aria-label="${label}"${disabled}>` +
     `<title>${shownTitle}</title>` +
     `<rect class="diagram-node-hit" x="${node.x + 4}" y="${node.y + 2}" width="${NODE_W - 8}" height="${NODE_H - 8}" rx="12" fill="transparent" stroke="transparent" stroke-width="1.5"/>` +
     `<rect class="diagram-tile" x="${tileX}" y="${tileY}" width="${TILE}" height="${TILE}" rx="16" fill="#232a35" stroke="#354050" stroke-width="1.5"/>` +

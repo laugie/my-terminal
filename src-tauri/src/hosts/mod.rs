@@ -14,7 +14,7 @@ pub use list::{compose_list, HostEntry, ListHostsResponse};
 pub use parse::{parse_status, ParseError, TailnetStatus};
 pub use store::{validate_manual_input, HostStore, ManualHost, MemoryHostStore, NewManualHost};
 
-use exec::RunOutput;
+pub(crate) use exec::RunOutput;
 use parse::TailscalePeer;
 
 /// Whether a topology address matched a Tailscale peer.
