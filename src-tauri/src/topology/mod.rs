@@ -18,6 +18,8 @@ pub use relay::{
 use crate::hosts::{AddressPresence, TailscaleDirectory};
 
 pub const TOPOLOGY_FILE_NAME: &str = "topology.json";
+/// Larger files are refused.
+const MAX_TOPOLOGY_BYTES: usize = 1_048_576;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,7 +102,7 @@ pub fn load_topology_from_dir(dir: &Path) -> TopologyView {
             };
         }
     };
-    if text.len() > 1_048_576 {
+    if text.len() > MAX_TOPOLOGY_BYTES {
         return TopologyView {
             config_path: display,
             state: "error".to_string(),
@@ -140,6 +142,15 @@ pub fn load_topology_from_dir(dir: &Path) -> TopologyView {
         };
     }
     view_from_topology(&display, &topology, &TailscaleDirectory::read())
+}
+
+/// Parsed topology.json, or None when it is missing, too large or invalid.
+pub fn read_topology_file(dir: &Path) -> Option<Topology> {
+    let text = std::fs::read_to_string(dir.join(TOPOLOGY_FILE_NAME)).ok()?;
+    if text.len() > MAX_TOPOLOGY_BYTES {
+        return None;
+    }
+    parse_topology(&text).ok()
 }
 
 fn view_from_topology(

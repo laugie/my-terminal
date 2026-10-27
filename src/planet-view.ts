@@ -52,7 +52,8 @@ import {
   type Planet,
   type PlanetModel,
 } from "./planets.ts";
-import type { TopologyView } from "./topology.ts";
+import { sameLayout } from "./presence.ts";
+import type { Presence, TopologyView } from "./topology.ts";
 
 const FOV = 45;
 const PRESENCE_TEXT = { online: "在线", offline: "离线", unknown: "在线状态未知", none: "" } as const;
@@ -64,7 +65,10 @@ export interface PlanetViewOptions {
 
 export interface PlanetView {
   readonly element: HTMLElement;
-  /** New data rebuilds the planets; the camera stays where the user left it. */
+  /**
+   * New data rebuilds the planets; the camera stays where the user left it.
+   * When only online states changed, the planets and labels change in place.
+   */
   update(view: TopologyView, options: PlanetViewOptions): void;
   dispose(): void;
 }
@@ -72,7 +76,11 @@ export interface PlanetView {
 interface PlanetParts {
   planet: Planet;
   mesh: Mesh;
-  halo: Sprite | null;
+  material: MeshStandardMaterial;
+  /** Cloud and NAS planets only. */
+  ring: MeshBasicMaterial | null;
+  /** Hidden while the device has no online state. */
+  halo: Sprite;
   selection: Mesh;
   label: HTMLElement;
 }
@@ -192,6 +200,22 @@ export function mountPlanetView(
     labels.render(scene, camera);
   }
 
+  function updatePresence(next: TopologyView): void {
+    const byName = new Map<string, Presence>();
+    for (const region of next.regions) {
+      for (const device of region.devices) {
+        byName.set(device.name, device.presence);
+      }
+    }
+    for (const part of parts) {
+      const presence = byName.get(part.planet.name);
+      if (presence !== undefined && presence !== part.planet.presence) {
+        part.planet.presence = presence;
+        showPresence(part);
+      }
+    }
+  }
+
   /** Removing a parent does not take CSS2D labels out of the DOM; do it here. */
   function removeContent(): void {
     content.traverse((object) => {
@@ -272,14 +296,11 @@ export function mountPlanetView(
 
     const surface = surfaceTexture(planet.color, planet.seed);
     const geometry = new SphereGeometry(planet.radius, 48, 32);
-    const offline = planet.presence === "offline";
     const material = new MeshStandardMaterial({
       map: surface,
-      color: offline ? 0x8a929c : 0xffffff,
       roughness: 0.78,
       metalness: 0.05,
       emissive: new Color(planet.color),
-      emissiveIntensity: offline ? 0 : 0.12,
     });
     ownedByContent.push(surface, geometry, material);
     const mesh = new Mesh(geometry, material);
@@ -287,13 +308,13 @@ export function mountPlanetView(
     mesh.userData.deviceName = planet.name;
     group.add(mesh);
 
+    let ringMaterial: MeshBasicMaterial | null = null;
     if (planet.kind === "cloud" || planet.kind === "nas") {
       const ringGeometry = new RingGeometry(planet.radius * 1.45, planet.radius * 2.05, 72);
-      const ringMaterial = new MeshBasicMaterial({
+      ringMaterial = new MeshBasicMaterial({
         color: planet.color,
         side: DoubleSide,
         transparent: true,
-        opacity: offline ? 0.18 : 0.38,
       });
       ownedByContent.push(ringGeometry, ringMaterial);
       const ring = new Mesh(ringGeometry, ringMaterial);
@@ -302,22 +323,17 @@ export function mountPlanetView(
       group.add(ring);
     }
 
-    let halo: Sprite | null = null;
-    const presence = presenceColor(planet.presence);
-    if (presence) {
-      const haloMaterial = new SpriteMaterial({
-        map: glow,
-        color: presence,
-        transparent: true,
-        depthWrite: false,
-        blending: AdditiveBlending,
-        opacity: planet.presence === "online" ? 0.85 : 0.5,
-      });
-      ownedByContent.push(haloMaterial);
-      halo = new Sprite(haloMaterial);
-      halo.scale.setScalar(planet.radius * 4.6);
-      group.add(halo);
-    }
+    // Always made, so a device that gets an online state later can glow.
+    const haloMaterial = new SpriteMaterial({
+      map: glow,
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+    });
+    ownedByContent.push(haloMaterial);
+    const halo = new Sprite(haloMaterial);
+    halo.scale.setScalar(planet.radius * 4.6);
+    group.add(halo);
 
     const selectionGeometry = new RingGeometry(planet.radius * 1.3, planet.radius * 1.42, 64);
     const selectionMaterial = new MeshBasicMaterial({
@@ -349,7 +365,9 @@ export function mountPlanetView(
     });
 
     content.add(group);
-    return { planet, mesh, halo, selection, label };
+    const part = { planet, mesh, material, ring: ringMaterial, halo, selection, label };
+    showPresence(part);
+    return part;
   }
 
   function drawLinks(model: PlanetModel): void {
@@ -509,7 +527,7 @@ export function mountPlanetView(
       part.label.classList.toggle("planet-hover", focused);
       if (!reducedMotion) {
         part.mesh.rotation.y += delta * 0.25;
-        if (part.halo && part.planet.presence === "online") {
+        if (part.planet.presence === "online") {
           const pulse = 0.7 + 0.2 * Math.sin(now / 600 + part.planet.seed);
           (part.halo.material as SpriteMaterial).opacity = pulse;
         }
@@ -587,8 +605,14 @@ export function mountPlanetView(
     element: stage,
     update(next, nextOptions) {
       options = nextOptions;
-      if (next !== current) {
-        current = next;
+      if (next === current) {
+        return;
+      }
+      const previous = current;
+      current = next;
+      if (previous && sameLayout(previous, next)) {
+        updatePresence(next);
+      } else {
         rebuild(next);
       }
     },
@@ -616,6 +640,41 @@ function floating(label: HTMLElement): CSS2DObject {
   return new CSS2DObject(anchor);
 }
 
+/**
+ * Online: bright surface and a pulsing green glow. Offline: dark surface, faint
+ * ring, grey glow and a dimmed label. Unknown keeps the amber ring.
+ */
+function showPresence(part: PlanetParts): void {
+  const { planet, material, ring, halo, label } = part;
+  const presence = planet.presence;
+  material.color.set(presence === "offline" ? 0x4e555e : 0xffffff);
+  material.emissiveIntensity = presence === "online" ? 0.38 : presence === "offline" ? 0 : 0.12;
+  if (ring) {
+    ring.opacity = presence === "offline" ? 0.12 : presence === "online" ? 0.5 : 0.38;
+  }
+  const glowColor = presenceColor(presence);
+  const haloMaterial = halo.material as SpriteMaterial;
+  halo.visible = glowColor !== null;
+  if (glowColor) {
+    haloMaterial.color.set(glowColor);
+  }
+  haloMaterial.opacity = presence === "online" ? 0.85 : presence === "offline" ? 0.3 : 0.5;
+
+  const dot = label.querySelector<HTMLElement>(".planet-presence");
+  if (dot) {
+    dot.className = `planet-presence planet-presence-${presence}`;
+    dot.hidden = presence === "none";
+  }
+  label.classList.toggle("planet-online", presence === "online");
+  label.classList.toggle("planet-offline", presence === "offline");
+  // syncDeviceOpenState adds the tab-limit hint to this base title.
+  const title = [`${planet.name} ${planet.host}:${planet.port}`, planet.mobile ? "移动设备" : "", PRESENCE_TEXT[presence]]
+    .filter((text) => text !== "")
+    .join(" ");
+  label.dataset.openTitle = title;
+  label.title = title;
+}
+
 function planetLabel(planet: Planet): HTMLElement {
   const label = document.createElement("div");
   label.className = "device planet-label";
@@ -624,20 +683,14 @@ function planetLabel(planet: Planet): HTMLElement {
   label.tabIndex = 0;
   label.setAttribute("role", "button");
   label.setAttribute("aria-label", `连接 ${planet.name}`);
-  const presence = PRESENCE_TEXT[planet.presence];
-  label.title = [`${planet.name} ${planet.host}:${planet.port}`, planet.mobile ? "移动设备" : "", presence]
-    .filter((part) => part !== "")
-    .join(" ");
 
   const name = document.createElement("span");
   name.className = "planet-name";
-  if (planet.presence !== "none") {
-    const dot = document.createElement("span");
-    dot.className = `planet-presence planet-presence-${planet.presence}`;
-    dot.setAttribute("aria-hidden", "true");
-    name.append(dot);
-  }
-  name.append(planet.name);
+  // Always made; showPresence sets its color or hides it.
+  const dot = document.createElement("span");
+  dot.className = "planet-presence";
+  dot.setAttribute("aria-hidden", "true");
+  name.append(dot, planet.name);
   if (planet.mobile) {
     const badge = document.createElement("span");
     badge.className = "planet-mobile";

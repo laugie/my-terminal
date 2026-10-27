@@ -10,7 +10,8 @@ import {
   type HostEntry,
   type ListHostsResponse,
 } from "./hosts.ts";
-import { loadTopology, type TopologyView } from "./topology.ts";
+import { loadTopology, probePresence, type TopologyView } from "./topology.ts";
+import { PRESENCE_INTERVAL_MS, applyPresence, connectedDevices, type DevicePresence } from "./presence.ts";
 import { renderTopology, syncDeviceOpenState } from "./topology-view.ts";
 import { mountTerminal, type TerminalHost } from "./terminal.ts";
 import { mountTabBar, toolButton, type TabBar } from "./tab-bar.ts";
@@ -273,6 +274,9 @@ let topologyBusy = false;
 let hostsBusy = false;
 let manualLoaded = false;
 let topologyView: TopologyView | null = null;
+let presenceBusy = false;
+let presenceAt = 0;
+let lastPresence: DevicePresence[] = [];
 let diagramWidth = 0;
 let diagramFrame = 0;
 
@@ -417,6 +421,9 @@ function present(key: string): void {
   tabBar.render(strip);
   markActive();
   syncNav();
+  if (onHome) {
+    void probePresenceNow();
+  }
 }
 
 function applyShortcut(action: ShortcutAction): void {
@@ -543,8 +550,10 @@ async function refreshTopology(): Promise<void> {
     if (generation !== topologyGeneration) {
       return;
     }
-    topologyView = view;
+    // Keep the last online states until the round below replaces them.
+    topologyView = applyPresence(view, lastPresence);
     paintTopology();
+    void probePresenceNow(true);
   } catch (err) {
     if (generation !== topologyGeneration) {
       return;
@@ -563,6 +572,55 @@ async function refreshTopology(): Promise<void> {
     }
   }
 }
+
+function topologyShowing(): boolean {
+  return signedIn && !document.hidden && page === "topology" && viewingHome();
+}
+
+/**
+ * One online-state round, only while the topology page is showing. Without
+ * `force` it runs only when the last round is older than the interval, so
+ * switching tabs does not probe the servers again and again.
+ */
+async function probePresenceNow(force = false): Promise<void> {
+  if (presenceBusy || !topologyShowing() || topologyView?.state !== "ok") {
+    return;
+  }
+  if (!force && Date.now() - presenceAt < PRESENCE_INTERVAL_MS) {
+    return;
+  }
+  presenceBusy = true;
+  presenceAt = Date.now();
+  const generation = topologyGeneration;
+  let reloaded = false;
+  try {
+    const results = await probePresence(connectedDevices(strip.tabs));
+    if (generation !== topologyGeneration || !topologyView) {
+      reloaded = true;
+      return;
+    }
+    lastPresence = results;
+    const next = applyPresence(topologyView, results);
+    if (next !== topologyView) {
+      topologyView = next;
+      paintTopology();
+    }
+  } catch {
+    // Keep the last states; the next round tries again.
+  } finally {
+    presenceBusy = false;
+    if (reloaded) {
+      void probePresenceNow(true);
+    }
+  }
+}
+
+window.setInterval(() => {
+  void probePresenceNow();
+}, 15_000);
+document.addEventListener("visibilitychange", () => {
+  void probePresenceNow();
+});
 
 function paintTopology(): void {
   if (!topologyView) {

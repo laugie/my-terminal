@@ -1027,6 +1027,12 @@ body {
   stroke: var(--accent);
 }
 
+.diagram .device[data-presence="offline"] .diagram-tile,
+.diagram .device[data-presence="offline"] .diagram-glyph,
+.diagram .device[data-presence="offline"] .diagram-name {
+  opacity: 0.55;
+}
+
 .diagram .device-open-disabled {
   cursor: default;
 }
@@ -1162,6 +1168,14 @@ body {
 
 .planet-label.planet-far {
   opacity: 0.45;
+}
+
+.planet-label.planet-offline {
+  opacity: 0.6;
+}
+
+.planet-label.planet-offline .planet-name {
+  color: var(--text-muted);
 }
 
 .planet-label.planet-hover,

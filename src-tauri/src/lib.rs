@@ -2,6 +2,7 @@ pub mod appearance;
 pub mod auth;
 pub mod config;
 pub mod hosts;
+pub mod presence;
 pub mod quit;
 pub mod remote_shell;
 pub mod session;
@@ -61,6 +62,7 @@ pub fn run() {
             hosts::add_manual_host,
             hosts::remove_manual_host,
             topology::load_topology,
+            presence::probe_presence,
             session::open_session,
             session::write_session,
             session::resize_session,
