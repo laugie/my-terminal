@@ -1961,7 +1961,7 @@ dependencies = [
 
 [[package]]
 name = "my-terminal"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "arboard",
  "argon2",

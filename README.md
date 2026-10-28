@@ -96,7 +96,8 @@
 | 右键 | 系统菜单 | 有选区时复制并清除选区，没有选区时粘贴 |
 
 - 粘贴内容带换行（包括单行末尾的换行）时，先弹出应用内确认框，显示行数和前 5 行预览，默认选中「取消」。粘贴时如果远端开启了 bracketed paste，会按 bracketed paste 发送。
-- 读写剪贴板走应用后端（arboard），不用 `navigator.clipboard`：macOS 的 webview 读剪贴板会弹出系统的「粘贴」小按钮，WebView2 会请求权限。菜单和右键菜单的粘贴由网页的 `paste` 事件接住，同样先确认多行内容。单次最多 4 MiB。
+- 复制在按键当下执行 webview 自己的复制命令，copy 事件写入 xterm 的选区文本：软换行的长行接回一行，真正的换行保留。菜单 Edit → Copy 走同一条路。webview 不执行复制命令时才改用应用后端（arboard）写剪贴板。
+- 读剪贴板走应用后端（arboard），不用 `navigator.clipboard`：macOS 的 webview 读剪贴板会弹出系统的「粘贴」小按钮，WebView2 会请求权限。菜单和右键菜单的粘贴由网页的 `paste` 事件接住，同样先确认多行内容。单次最多 4 MiB。
 - vim、tmux、htop 等开启鼠标模式的程序会接管鼠标拖动。此时 macOS 按住 Option 拖动、Windows 按住 Shift 拖动仍可选择。
 
 ## 拓扑首页

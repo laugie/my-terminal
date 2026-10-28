@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   clipboardKey,
+  CopyRelay,
   pasteConfirmText,
   pasteLineCount,
   pasteNeedsConfirm,
@@ -103,4 +104,60 @@ test("the preview is short: five lines, long lines cut", () => {
   assert.ok(shown[1].length <= 81 && shown[1].endsWith("…"), shown[1]);
   assert.equal(shown[4], "line 5");
   assert.equal(shown[5], "…另有 3 行");
+});
+
+// V1.0.3 macOS: Cmd+C left only the last row of the selection on the clipboard.
+// The copy now runs as the webview's own copy command, and the copy event
+// carries the terminal selection exactly as xterm builds it.
+const WRAPPED_URL = `https://example.com/${"abcdefghij".repeat(14)}?q=end`;
+const LINES = "line one\nline two\nline three";
+
+/** A fake webview: the copy command fires one copy event into the relay. */
+function webview(relay: CopyRelay, selection: string) {
+  const clipboard: string[] = [];
+  return {
+    clipboard,
+    execCopy: () => {
+      const text = relay.take(() => selection);
+      if (text !== null) {
+        clipboard.push(text);
+      }
+      return true;
+    },
+  };
+}
+
+test("the copy command carries a wrapped line and several lines verbatim", () => {
+  for (const text of [WRAPPED_URL, LINES]) {
+    const relay = new CopyRelay();
+    const view = webview(relay, "stale");
+    assert.equal(relay.copy(text, view.execCopy), true);
+    assert.deepEqual(view.clipboard, [text]);
+  }
+  assert.equal(WRAPPED_URL.includes("\n"), false);
+});
+
+test("a copy from the Edit menu takes the current selection", () => {
+  const relay = new CopyRelay();
+  assert.equal(relay.take(() => LINES), LINES);
+  assert.equal(relay.take(() => WRAPPED_URL), WRAPPED_URL);
+  assert.equal(relay.take(() => ""), null, "nothing selected: leave the event alone");
+});
+
+test("the copy falls back when the webview does not run the command", () => {
+  const relay = new CopyRelay();
+  assert.equal(relay.copy(LINES, () => false), false);
+  assert.equal(relay.copy(LINES, () => true), false, "command ran but no copy event arrived");
+  assert.equal(
+    relay.copy(LINES, () => {
+      throw new Error("unsupported");
+    }),
+    false,
+  );
+});
+
+test("text waiting for one copy does not leak into the next", () => {
+  const relay = new CopyRelay();
+  relay.copy(LINES, () => false);
+  assert.equal(relay.take(() => WRAPPED_URL), WRAPPED_URL);
 });
