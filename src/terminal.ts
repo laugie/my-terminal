@@ -3,7 +3,6 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { fontOf, themeOf, type FontChoice, type ThemeChoice } from "./appearance.ts";
 import {
-  clipboardKey,
   CopyRelay,
   pasteConfirmText,
   pasteNeedsConfirm,
@@ -22,6 +21,7 @@ import {
   type SessionEvent,
 } from "./session.ts";
 import { shortcutAction, type ShortcutAction } from "./tabs.ts";
+import { terminalKey } from "./terminal-keys.ts";
 import { openTopologyDevice } from "./topology.ts";
 import { splitWriteChunks } from "./write-chunks.ts";
 import { WriteQueue } from "./write-queue.ts";
@@ -396,55 +396,44 @@ export function mountTerminal(
   }
 
   function onWindowKeyDown(event: KeyboardEvent): void {
-    if (event.isComposing || event.altKey) {
+    const session = active();
+    const key = terminalKey(event, shortcutPlatform(), session?.term.hasSelection() ?? false);
+    if (!key) {
       return;
     }
-    const zoom = shortcutAction(event, shortcutPlatform());
-    if (zoom?.type === "zoom") {
+    if (key.type === "shortcut" && key.action.type === "zoom") {
       // Zoom keys type nothing in a form field, so they work on the login screen too.
       consume(event);
-      hooks.onShortcut(zoom);
+      hooks.onShortcut(key.action);
       return;
     }
     if (typingInForm(event)) {
       return;
     }
-    if (event.ctrlKey && !event.metaKey && event.key === "Tab") {
-      consume(event);
-      hooks.onCycle(event.shiftKey ? -1 : 1);
-      return;
-    }
-    const action = shortcutAction(event, shortcutPlatform());
-    if (action) {
-      consume(event);
-      if (!(action.type === "close" && event.repeat)) {
-        hooks.onShortcut(action);
-      }
-      return;
-    }
-    const session = active();
-    const clip = clipboardKey(event, shortcutPlatform(), session?.term.hasSelection() ?? false);
-    if (clip) {
-      // Without a session tab the key stays with the page.
-      if (session) {
+    switch (key.type) {
+      case "cycle":
         consume(event);
-        if (!closeConfirmOpen()) {
-          runClipboard(session, clip);
-        }
-      }
-      return;
-    }
-    const mac = shortcutPlatform() === "mac";
-    if (mac) {
-      if (!event.metaKey || event.ctrlKey) {
+        hooks.onCycle(key.step);
         return;
-      }
-    } else if (!event.ctrlKey || event.metaKey || !event.shiftKey) {
-      return;
-    }
-    if (event.key.toUpperCase() === "T") {
-      consume(event);
-      hooks.onNew();
+      case "shortcut":
+        consume(event);
+        if (!(key.action.type === "close" && event.repeat)) {
+          hooks.onShortcut(key.action);
+        }
+        return;
+      case "clipboard":
+        // Without a session tab the key stays with the page.
+        if (session) {
+          consume(event);
+          if (!closeConfirmOpen()) {
+            runClipboard(session, key.action);
+          }
+        }
+        return;
+      case "new":
+        consume(event);
+        hooks.onNew();
+        return;
     }
   }
 
