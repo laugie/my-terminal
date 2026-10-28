@@ -936,6 +936,25 @@ body {
   color: var(--text-muted);
 }
 
+/* Paste preview. The dialog widens for it; long lines scroll, not wrap. */
+.close-confirm:has(.close-confirm-detail) {
+  width: min(560px, 100%);
+}
+
+.close-confirm-detail {
+  margin: -6px 0 16px;
+  padding: 8px 10px;
+  max-height: 9.5em;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
 .close-confirm-actions {
   display: flex;
   justify-content: flex-end;

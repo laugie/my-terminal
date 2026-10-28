@@ -25,6 +25,8 @@ export interface ConfirmText {
   confirmLabel: string;
   /** Start on Cancel, so a stray Enter keeps the app open. */
   focusCancel?: boolean;
+  /** Preformatted text shown below the message, such as a paste preview. */
+  detail?: string;
 }
 
 /** Markup for the in-app close confirmation. */
@@ -35,6 +37,7 @@ export function renderCloseConfirm(tabTitle: string, text?: ConfirmText): string
     `<div class="close-confirm" role="alertdialog" aria-modal="true" aria-labelledby="close-confirm-message">` +
     `<p class="close-confirm-title">${escapeHtml(tabTitle)}</p>` +
     `<p class="close-confirm-message" id="close-confirm-message">${message}</p>` +
+    (text?.detail ? `<pre class="close-confirm-detail">${escapeHtml(text.detail)}</pre>` : "") +
     `<div class="close-confirm-actions">` +
     `<button type="button" class="button" data-choice="cancel">取消</button>` +
     `<button type="button" class="button primary" data-choice="confirm">${confirmLabel}</button>` +

@@ -1,5 +1,6 @@
 pub mod appearance;
 pub mod auth;
+pub mod clipboard;
 pub mod config;
 pub mod hosts;
 pub mod presence;
@@ -71,6 +72,8 @@ pub fn run() {
             zoom::ui_zoom_set,
             appearance::appearance_load,
             appearance::appearance_set,
+            clipboard::clipboard_read_text,
+            clipboard::clipboard_write_text,
             remote_shell::remote_shell_run,
             quit::close_prompt_shown,
             quit::quit_confirmed,
