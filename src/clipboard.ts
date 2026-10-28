@@ -93,3 +93,47 @@ function latinLetter(event: ShortcutKey): string {
   const match = /^Key([A-Z])$/.exec(event.code ?? "");
   return match ? match[1].toLowerCase() : "";
 }
+
+/**
+ * Hands the terminal selection to the webview's own copy command.
+ *
+ * The command writes the clipboard synchronously, inside the key press, so no
+ * later write can replace it. Every copy event in a terminal tab, from the
+ * keyboard or the Edit menu, carries the selection as xterm builds it: wrapped
+ * rows joined, real line breaks kept.
+ */
+export class CopyRelay {
+  private pending: string | null = null;
+  private delivered = false;
+
+  /**
+   * Run `execCopy` with `text` waiting for the copy event. False when the
+   * command did not run or no copy event took the text; the caller then
+   * writes the clipboard another way.
+   */
+  copy(text: string, execCopy: () => boolean): boolean {
+    this.pending = text;
+    this.delivered = false;
+    let ran = false;
+    try {
+      ran = execCopy();
+    } catch {
+      ran = false;
+    } finally {
+      this.pending = null;
+    }
+    return ran && this.delivered;
+  }
+
+  /** Text for a copy event, or null to leave the event alone. */
+  take(selection: () => string): string | null {
+    const text = this.pending ?? selection();
+    if (text === "") {
+      return null;
+    }
+    if (this.pending !== null) {
+      this.delivered = true;
+    }
+    return text;
+  }
+}

@@ -4,6 +4,7 @@ import "@xterm/xterm/css/xterm.css";
 import { fontOf, themeOf, type FontChoice, type ThemeChoice } from "./appearance.ts";
 import {
   clipboardKey,
+  CopyRelay,
   pasteConfirmText,
   pasteNeedsConfirm,
   rightClickAction,
@@ -95,6 +96,12 @@ export function mountTerminal(
   // Edit menu and context-menu pastes arrive here. Taken before xterm, which
   // would paste without asking.
   document.addEventListener("paste", onPaste, true);
+  // Every copy in a terminal tab carries xterm's selection text, whichever
+  // way the copy started. WebKit enables Edit > Copy only when the page
+  // claims beforecopy.
+  const copyRelay = new CopyRelay();
+  document.addEventListener("copy", onCopy, true);
+  document.addEventListener("beforecopy", onBeforeCopy, true);
 
   async function openDevice(
     key: string,
@@ -455,9 +462,34 @@ export function mountTerminal(
     if (text === "") {
       return;
     }
+    // The webview's own copy command writes the clipboard before this key
+    // press ends. The app's clipboard command is only the fallback.
+    if (copyRelay.copy(text, () => document.execCommand("copy"))) {
+      return;
+    }
     void writeClipboardText(text).catch((err: unknown) => {
       showError(session, errorText(err));
     });
+  }
+
+  function onCopy(event: ClipboardEvent): void {
+    const session = active();
+    if (!session || !event.clipboardData || typingInForm(event)) {
+      return;
+    }
+    const text = copyRelay.take(() => session.term.getSelection());
+    if (text === null) {
+      return;
+    }
+    event.clipboardData.setData("text/plain", text);
+    consume(event);
+  }
+
+  function onBeforeCopy(event: Event): void {
+    const session = active();
+    if (session?.term.hasSelection() && !typingInForm(event)) {
+      event.preventDefault();
+    }
   }
 
   async function pasteFromClipboard(session: Session): Promise<void> {
