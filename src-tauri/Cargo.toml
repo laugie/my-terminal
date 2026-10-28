@@ -1,6 +1,6 @@
 [package]
 name = "my-terminal"
-version = "1.0.2"
+version = "1.0.3"
 description = "Lightweight SSH client for macOS and Windows"
 authors = ["laugie"]
 edition = "2021"
@@ -21,6 +21,8 @@ argon2 = "=0.5.3"
 keyring = { version = "=3.6.3", features = ["apple-native", "windows-native"] }
 # rand_core 0.6 matches the RNG crate argon2 0.5 already uses. OsRng needs the getrandom feature.
 rand_core = { version = "=0.6.4", features = ["getrandom"] }
+# Text only. The default image-data feature pulls in an image codec.
+arboard = { version = "3", default-features = false }
 
 [profile.release]
 codegen-units = 16

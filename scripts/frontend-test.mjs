@@ -48,6 +48,7 @@ try {
     path.join(outDir, "quit-confirm.test.js"),
     path.join(outDir, "tab-bar.test.js"),
     path.join(outDir, "presence.test.js"),
+    path.join(outDir, "clipboard.test.js"),
   ]);
 } finally {
   await rm(outDir, { recursive: true, force: true });

@@ -22,6 +22,8 @@
     "allow-ui-zoom-set",
     "allow-appearance-load",
     "allow-appearance-set",
+    "allow-clipboard-read-text",
+    "allow-clipboard-write-text",
     "allow-remote-shell-run",
     "allow-close-prompt-shown",
     "allow-quit-confirmed"

@@ -33,3 +33,13 @@ test("the dialog names the tab and offers cancel and end", () => {
   assert.ok(html.includes('data-choice="cancel"'));
   assert.ok(html.includes('data-choice="confirm"'));
 });
+
+test("an optional preview is shown escaped below the message", () => {
+  const html = renderCloseConfirm("web-1", {
+    message: "要粘贴 2 行内容吗？",
+    confirmLabel: "粘贴",
+    detail: "echo <a>\necho \"b\"",
+  });
+  assert.ok(html.includes('<pre class="close-confirm-detail">echo &lt;a&gt;\necho &quot;b&quot;</pre>'), html);
+  assert.equal(renderCloseConfirm("web-1").includes("close-confirm-detail"), false);
+});

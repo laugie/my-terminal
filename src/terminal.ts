@@ -2,6 +2,15 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { fontOf, themeOf, type FontChoice, type ThemeChoice } from "./appearance.ts";
+import {
+  clipboardKey,
+  pasteConfirmText,
+  pasteNeedsConfirm,
+  rightClickAction,
+  type ClipboardAction,
+} from "./clipboard.ts";
+import { readClipboardText, writeClipboardText } from "./clipboard-api.ts";
+import { askCloseConfirm, closeConfirmOpen } from "./close-confirm.ts";
 import { errorText, type HostEntry } from "./hosts.ts";
 import {
   closeSession,
@@ -83,6 +92,9 @@ export function mountTerminal(
   });
   observer.observe(stack);
   window.addEventListener("keydown", onWindowKeyDown, true);
+  // Edit menu and context-menu pastes arrive here. Taken before xterm, which
+  // would paste without asking.
+  document.addEventListener("paste", onPaste, true);
 
   async function openDevice(
     key: string,
@@ -117,6 +129,11 @@ export function mountTerminal(
       scrollback: 5000,
       theme: { ...theme.palette },
       minimumContrastRatio: theme.minimumContrastRatio ?? 1,
+      // Windows uses right-click for copy and paste, so it must not select a word first.
+      rightClickSelectsWord: shortcutPlatform() === "mac",
+      // Option-drag selects even when a program such as tmux or vim takes the mouse.
+      // Shift-drag does the same on Windows.
+      macOptionClickForcesSelection: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -155,6 +172,18 @@ export function mountTerminal(
     term.onData((data) => {
       submitInput(session, data);
     });
+    if (shortcutPlatform() === "windows") {
+      // Taken before xterm and the webview's own menu.
+      view.addEventListener(
+        "contextmenu",
+        (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          runClipboard(session, rightClickAction(term.hasSelection()));
+        },
+        true,
+      );
+    }
     term.open(view);
     return session;
   }
@@ -386,6 +415,18 @@ export function mountTerminal(
       }
       return;
     }
+    const session = active();
+    const clip = clipboardKey(event, shortcutPlatform(), session?.term.hasSelection() ?? false);
+    if (clip) {
+      // Without a session tab the key stays with the page.
+      if (session) {
+        consume(event);
+        if (!closeConfirmOpen()) {
+          runClipboard(session, clip);
+        }
+      }
+      return;
+    }
     const mac = shortcutPlatform() === "mac";
     if (mac) {
       if (!event.metaKey || event.ctrlKey) {
@@ -394,62 +435,68 @@ export function mountTerminal(
     } else if (!event.ctrlKey || event.metaKey || !event.shiftKey) {
       return;
     }
-    switch (event.key.toUpperCase()) {
-      case "T":
-        consume(event);
-        hooks.onNew();
-        break;
-      case "C":
-        consume(event);
-        void copySelection().catch((err: unknown) => {
-          sessionError.textContent = errorText(err);
-        });
-        break;
-      case "V":
-        consume(event);
-        void pasteActive().catch((err: unknown) => {
-          const session = active();
-          if (session) {
-            showError(session, errorText(err));
-          } else {
-            sessionError.textContent = errorText(err);
-          }
-        });
-        break;
-      default:
-        break;
+    if (event.key.toUpperCase() === "T") {
+      consume(event);
+      hooks.onNew();
     }
   }
 
-  async function copySelection(): Promise<void> {
-    const session = active();
-    if (!session) {
+  function runClipboard(session: Session, action: ClipboardAction): void {
+    if (action === "paste") {
+      void pasteFromClipboard(session).catch((err: unknown) => {
+        showError(session, errorText(err));
+      });
       return;
     }
     const text = session.term.getSelection();
+    if (action === "copy-clear") {
+      session.term.clearSelection();
+    }
     if (text === "") {
       return;
     }
-    if (!navigator.clipboard?.writeText) {
-      throw new Error("无法写入剪贴板");
-    }
-    await navigator.clipboard.writeText(text);
+    void writeClipboardText(text).catch((err: unknown) => {
+      showError(session, errorText(err));
+    });
   }
 
-  async function pasteActive(): Promise<void> {
-    const session = active();
-    if (!session || blocksInput(session)) {
+  async function pasteFromClipboard(session: Session): Promise<void> {
+    if (blocksInput(session)) {
       return;
     }
     const generation = session.generation;
-    if (!navigator.clipboard?.readText) {
-      throw new Error("无法读取剪贴板");
-    }
-    const text = await navigator.clipboard.readText();
-    if (session.generation !== generation || blocksInput(session)) {
+    const text = await readClipboardText();
+    if (session.generation !== generation) {
       return;
     }
-    submitInput(session, text);
+    await pasteText(session, text);
+  }
+
+  function onPaste(event: ClipboardEvent): void {
+    const session = active();
+    if (!session || closeConfirmOpen() || typingInForm(event)) {
+      return;
+    }
+    consume(event);
+    void pasteText(session, event.clipboardData?.getData("text/plain") ?? "");
+  }
+
+  /** Multi-line text asks first. `term.paste` adds bracketed paste when the shell asks for it. */
+  async function pasteText(session: Session, text: string): Promise<void> {
+    if (text === "" || blocksInput(session) || closeConfirmOpen()) {
+      return;
+    }
+    if (pasteNeedsConfirm(text)) {
+      const generation = session.generation;
+      const confirmed = await askCloseConfirm(originTitle(session.origin), pasteConfirmText(text));
+      if (activeKey === session.key) {
+        session.term.focus();
+      }
+      if (!confirmed || session.generation !== generation || blocksInput(session)) {
+        return;
+      }
+    }
+    session.term.paste(text);
   }
 
   function submitInput(session: Session, text: string): void {
@@ -556,6 +603,13 @@ function openOrigin(
   return openTopologyDevice(origin.name, onEvent, origin.connectionName);
 }
 
+function originTitle(origin: TabOrigin): string {
+  if (origin.kind === "host") {
+    return origin.host.name;
+  }
+  return origin.connectionName ? `${origin.name} · ${origin.connectionName}` : origin.name;
+}
+
 function currentPhase(session: Session): Phase {
   return session.phase;
 }
@@ -570,7 +624,7 @@ export function shortcutPlatform(): "mac" | "windows" {
   return /mac/i.test(platform) ? "mac" : "windows";
 }
 
-function typingInForm(event: KeyboardEvent): boolean {
+function typingInForm(event: Event): boolean {
   const target = event.target;
   if (!(target instanceof HTMLElement) || target.closest(".terminal-panel, .xterm")) {
     return false;
@@ -578,7 +632,7 @@ function typingInForm(event: KeyboardEvent): boolean {
   return target.matches("input, textarea, select, [contenteditable='true']");
 }
 
-function consume(event: KeyboardEvent): void {
+function consume(event: Event): void {
   event.preventDefault();
   event.stopPropagation();
 }

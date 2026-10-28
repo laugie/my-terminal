@@ -84,6 +84,21 @@
 - tao 0.37 在 macOS 上没有实现 `applicationShouldTerminate`，菜单自带的「退出」拦不住，所以应用菜单换成了自己的「Quit my-terminal」（Cmd+Q），其余菜单项与 Tauri 默认菜单相同。Dock 右键「退出」和注销关机走系统流程，仍会直接退出。
 - 后端拦下关闭时会等网页回报「已弹出」。网页卡住、没有回报时，3 秒后再点一次关闭会直接退出，应用不会被困住。
 
+## 选择、复制、粘贴
+
+鼠标拖动选择，双击选中一个词，三击选中一整行。
+
+| | macOS | Windows |
+|---|---|---|
+| 复制 | Cmd+C | Ctrl+Shift+C；有选区时 Ctrl+C 也复制并清除选区 |
+| 粘贴 | Cmd+V、菜单「Edit → Paste」 | Ctrl+Shift+V |
+| 中断（^C） | Ctrl+C，有选区时也是中断 | 没有选区时按 Ctrl+C |
+| 右键 | 系统菜单 | 有选区时复制并清除选区，没有选区时粘贴 |
+
+- 粘贴内容带换行（包括单行末尾的换行）时，先弹出应用内确认框，显示行数和前 5 行预览，默认选中「取消」。粘贴时如果远端开启了 bracketed paste，会按 bracketed paste 发送。
+- 读写剪贴板走应用后端（arboard），不用 `navigator.clipboard`：macOS 的 webview 读剪贴板会弹出系统的「粘贴」小按钮，WebView2 会请求权限。菜单和右键菜单的粘贴由网页的 `paste` 事件接住，同样先确认多行内容。单次最多 4 MiB。
+- vim、tmux、htop 等开启鼠标模式的程序会接管鼠标拖动。此时 macOS 按住 Option 拖动、Windows 按住 Shift 拖动仍可选择。
+
 ## 拓扑首页
 
 首页是本机 `topology.json` 的网络拓扑图。它和 `config.json` 在同一目录：
