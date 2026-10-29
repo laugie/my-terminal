@@ -13,6 +13,7 @@ import {
 import { readClipboardText, writeClipboardText } from "./clipboard-api.ts";
 import { askCloseConfirm, closeConfirmOpen } from "./close-confirm.ts";
 import { errorText, type HostEntry } from "./hosts.ts";
+import { ImeDirectInput } from "./ime-input.ts";
 import {
   closeSession,
   openSession,
@@ -171,7 +172,28 @@ export function mountTerminal(
       }
       return true;
     });
+    // Text the input method commits without a composition (Chinese punctuation,
+    // digits) is sent from its input event only. xterm skips keydown 229.
+    const ime = new ImeDirectInput();
+    view.addEventListener("compositionend", () => ime.compositionEnd(), true);
+    view.addEventListener(
+      "input",
+      (event) => {
+        if (event.target !== term.textarea || !(event instanceof InputEvent)) {
+          return;
+        }
+        const text = ime.input(event);
+        if (text !== null) {
+          event.stopImmediatePropagation();
+          term.input(text, true);
+        }
+      },
+      true,
+    );
     term.attachCustomKeyEventHandler((event) => {
+      if (ime.key(event)) {
+        return false;
+      }
       if (event.isComposing) {
         return true;
       }
