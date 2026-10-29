@@ -7,6 +7,7 @@ pub mod presence;
 pub mod quit;
 pub mod remote_shell;
 pub mod session;
+pub mod sftp;
 pub mod topology;
 pub mod zoom;
 
@@ -49,6 +50,7 @@ pub fn run() {
             }
             app.manage(hosts);
             app.manage(session::SessionState::new());
+            app.manage(sftp::SftpState::new());
             app.manage(auth);
             app.manage(quit::QuitState::default());
             Ok(())
@@ -75,6 +77,13 @@ pub fn run() {
             clipboard::clipboard_read_text,
             clipboard::clipboard_write_text,
             remote_shell::remote_shell_run,
+            sftp::sftp_open,
+            sftp::sftp_list,
+            sftp::sftp_close,
+            sftp::local_default_dir,
+            sftp::local_list,
+            sftp::transfer_start,
+            sftp::transfer_cancel,
             quit::close_prompt_shown,
             quit::quit_confirmed,
         ])
@@ -86,6 +95,9 @@ pub fn run() {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 if let Some(state) = app.try_state::<session::SessionState>() {
+                    state.shutdown_blocking();
+                }
+                if let Some(state) = app.try_state::<sftp::SftpState>() {
                     state.shutdown_blocking();
                 }
             }

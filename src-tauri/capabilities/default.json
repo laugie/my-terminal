@@ -25,6 +25,13 @@
     "allow-clipboard-read-text",
     "allow-clipboard-write-text",
     "allow-remote-shell-run",
+    "allow-sftp-open",
+    "allow-sftp-list",
+    "allow-sftp-close",
+    "allow-local-default-dir",
+    "allow-local-list",
+    "allow-transfer-start",
+    "allow-transfer-cancel",
     "allow-close-prompt-shown",
     "allow-quit-confirmed"
   ]

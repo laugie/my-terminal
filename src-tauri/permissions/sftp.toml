@@ -1,0 +1,34 @@
+[[permission]]
+identifier = "allow-sftp-open"
+description = "Enables the sftp_open command without any pre-configured scope."
+commands.allow = ["sftp_open"]
+
+[[permission]]
+identifier = "allow-sftp-list"
+description = "Enables the sftp_list command without any pre-configured scope."
+commands.allow = ["sftp_list"]
+
+[[permission]]
+identifier = "allow-sftp-close"
+description = "Enables the sftp_close command without any pre-configured scope."
+commands.allow = ["sftp_close"]
+
+[[permission]]
+identifier = "allow-local-default-dir"
+description = "Enables the local_default_dir command without any pre-configured scope."
+commands.allow = ["local_default_dir"]
+
+[[permission]]
+identifier = "allow-local-list"
+description = "Enables the local_list command without any pre-configured scope."
+commands.allow = ["local_list"]
+
+[[permission]]
+identifier = "allow-transfer-start"
+description = "Enables the transfer_start command without any pre-configured scope."
+commands.allow = ["transfer_start"]
+
+[[permission]]
+identifier = "allow-transfer-cancel"
+description = "Enables the transfer_cancel command without any pre-configured scope."
+commands.allow = ["transfer_cancel"]

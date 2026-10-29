@@ -9,7 +9,12 @@ export type UiIconName =
   | "gear"
   | "reconnect"
   | "terminal"
-  | "planet";
+  | "planet"
+  | "folder"
+  | "file"
+  | "upload"
+  | "download"
+  | "up";
 
 const PATHS: Record<UiIconName, string> = {
   plus: `<path d="M8 3.5v9M3.5 8h9"/>`,
@@ -31,6 +36,11 @@ const PATHS: Record<UiIconName, string> = {
     `<circle cx="8" cy="8" r="4.25"/>`,
   reconnect: `<path d="M2.75 8a5.25 5.25 0 0 1 9-3.7M13.25 8a5.25 5.25 0 0 1-9 3.7M11.75 1.75v2.75H9M4.25 14.25V11.5H7"/>`,
   planet: `<circle cx="8" cy="8" r="3.5"/><ellipse cx="8" cy="8" rx="7" ry="2.4" transform="rotate(-18 8 8)"/>`,
+  folder: `<path d="M1.75 4.25a1 1 0 0 1 1-1h3.1l1.4 1.5h5.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/>`,
+  file: `<path d="M4 1.75h5.25l2.75 2.75v9.75H4z"/><path d="M9.25 1.75V4.5H12"/>`,
+  upload: `<path d="M8 10.5V2.75M4.75 6 8 2.75 11.25 6M2.75 13.25h10.5"/>`,
+  download: `<path d="M8 2.75v7.75M4.75 7.25 8 10.5l3.25-3.25M2.75 13.25h10.5"/>`,
+  up: `<path d="M8 13V3.25M3.75 7.5 8 3.25l4.25 4.25"/>`,
   terminal: `<rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.75"/><path d="M4.5 6.25 6.75 8 4.5 9.75M8.5 10h3"/>`,
 };
 
