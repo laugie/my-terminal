@@ -99,6 +99,7 @@
 - 复制在按键当下执行 webview 自己的复制命令，copy 事件写入 xterm 的选区文本：软换行的长行接回一行，真正的换行保留。菜单 Edit → Copy 走同一条路。webview 不执行复制命令时才改用应用后端（arboard）写剪贴板。
 - 读剪贴板走应用后端（arboard），不用 `navigator.clipboard`：macOS 的 webview 读剪贴板会弹出系统的「粘贴」小按钮，WebView2 会请求权限。菜单和右键菜单的粘贴由网页的 `paste` 事件接住，同样先确认多行内容。单次最多 4 MiB。
 - vim、tmux、htop 等开启鼠标模式的程序会接管鼠标拖动。此时 macOS 按住 Option 拖动、Windows 按住 Shift 拖动仍可选择。
+- 程序自己复制时（tmux 的复制模式、tmux 里的 Claude Code、开了 OSC 52 的 vim），远端用 OSC 52 把文字交给终端，应用直接写进系统剪贴板，松开鼠标就已复制，不用再按 Cmd+C。远端只能写剪贴板，读取请求一律不回应；内容为空或格式不对时不动剪贴板。tmux 3.2 起默认会转发；更早的版本需要 `set -g set-clipboard on`。
 
 ## 拓扑首页
 
