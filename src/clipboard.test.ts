@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   clipboardKey,
   CopyRelay,
+  osc52Text,
   pasteConfirmText,
   pasteLineCount,
   pasteNeedsConfirm,
@@ -160,4 +161,31 @@ test("text waiting for one copy does not leak into the next", () => {
   const relay = new CopyRelay();
   relay.copy(LINES, () => false);
   assert.equal(relay.take(() => WRAPPED_URL), WRAPPED_URL);
+});
+
+// 1.0.4：tmux 里的 Claude Code 自己处理拖选，复制经 tmux 用 OSC 52 交给外层终端。
+const b64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+
+test("OSC 52 from tmux carries the whole selection", () => {
+  // tmux 3.6 `load-buffer -w` writes ESC ] 52 ; ; <base64> BEL: an empty target.
+  assert.equal(osc52Text(";bGluZSBvbmUKbGluZSB0d28KbGluZSB0aHJlZQ=="), LINES);
+  assert.equal(osc52Text(`;${b64(WRAPPED_URL)}`), WRAPPED_URL);
+  assert.equal(osc52Text(`c;${b64(WRAPPED_URL)}`), WRAPPED_URL);
+  assert.equal(osc52Text(`pc;${b64(LINES)}`), LINES);
+});
+
+test("OSC 52 keeps UTF-8 text", () => {
+  const text = "复制完整选区 ✓ $%&";
+  assert.equal(osc52Text(`c;${b64(text)}`), text);
+});
+
+test("OSC 52 never reads the clipboard and ignores bad requests", () => {
+  assert.equal(osc52Text("c;?"), null, "a read request gets no answer");
+  assert.equal(osc52Text(";?"), null);
+  assert.equal(osc52Text("c;"), null, "an empty write does not clear the clipboard");
+  assert.equal(osc52Text("c;not base64!"), null);
+  assert.equal(osc52Text("c;YWJj="), null, "bad padding");
+  assert.equal(osc52Text("x;YWJj"), null, "unknown target");
+  assert.equal(osc52Text("YWJj"), null, "no target field");
+  assert.equal(osc52Text(`c;${btoa("\xff\xfe")}`), null, "not UTF-8");
 });
