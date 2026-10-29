@@ -37,6 +37,8 @@
     "src/presence.test.ts",
     "src/clipboard.test.ts",
     "src/terminal-keys.test.ts",
-    "src/ime-input.test.ts"
+    "src/ime-input.test.ts",
+    "src/sftp-model.ts",
+    "src/sftp-model.test.ts"
   ]
 }

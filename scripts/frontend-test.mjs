@@ -51,6 +51,7 @@ try {
     path.join(outDir, "clipboard.test.js"),
     path.join(outDir, "terminal-keys.test.js"),
     path.join(outDir, "ime-input.test.js"),
+    path.join(outDir, "sftp-model.test.js"),
   ]);
 } finally {
   await rm(outDir, { recursive: true, force: true });

@@ -18,6 +18,8 @@ import { mountTabBar, toolButton, type TabBar } from "./tab-bar.ts";
 import { closeSession, sshTargetOf } from "./session.ts";
 import { AutoBeautify, reportMessage, type ShellTarget } from "./remote-shell.ts";
 import { runRemoteShell } from "./remote-shell-api.ts";
+import { onNativeDrag } from "./sftp-api.ts";
+import { mountSftpView, type SftpView } from "./sftp-view.ts";
 import { QuitPrompt } from "./quit-confirm.ts";
 import { closePromptShown, onCloseRequested, quitConfirmed } from "./quit-api.ts";
 import { askCloseConfirm, closeConfirmOpen, needsCloseConfirm } from "./close-confirm.ts";
@@ -42,6 +44,8 @@ type Page = "topology" | "manual";
 const manualButton = toolButton("servers", "手动服务器");
 manualButton.setAttribute("aria-pressed", "false");
 const refreshButton = toolButton("reload", "重新加载");
+const filesButton = toolButton("folder", "文件传输");
+filesButton.setAttribute("aria-pressed", "false");
 const planetButton = toolButton("planet", "3D 视图");
 planetButton.setAttribute("aria-pressed", "true");
 planetButton.title = "在 3D 星球和平面图之间切换";
@@ -83,9 +87,11 @@ manualRoot.append(manualInner);
 
 const terminalPanel = el("section", "terminal-panel");
 terminalPanel.hidden = true;
+const sftpPanel = el("section", "sftp-panel");
+sftpPanel.hidden = true;
 const shell = el("div", "shell");
 shell.hidden = true;
-shell.append(statusBar, topologyRoot, manualRoot, terminalPanel);
+shell.append(statusBar, topologyRoot, manualRoot, terminalPanel, sftpPanel);
 app.append(shell);
 
 const tabBar: TabBar = mountTabBar(shell, {
@@ -110,8 +116,12 @@ const tabBar: TabBar = mountTabBar(shell, {
 const host: { terminal: TerminalHost | null } = { terminal: null };
 /** Wait after a tab connects before the background beautify run. */
 const AUTO_BEAUTIFY_DELAY_MS = 4000;
-/** Route of each session tab, for the remote shell script. */
+/** Route of each session tab, for the remote shell script and file transfer. */
 const shellTargets = new Map<string, ShellTarget>();
+/** File transfer view of each session tab, made the first time it is opened. */
+const sftpViews = new Map<string, SftpView>();
+/** Session tabs currently showing file transfer instead of the terminal. */
+const filesShown = new Set<string>();
 const strip: TabStrip = new TabStrip({
   openSession(name: string, connectionName?: string): Promise<{ id: string }> {
     const opener = host.terminal;
@@ -195,7 +205,7 @@ const settingsSlot = el("div", "settings-slot");
 const settingsButton = toolButton("gear", "设置", { iconOnly: true });
 settingsButton.setAttribute("aria-expanded", "false");
 settingsSlot.append(settingsButton);
-tabBar.end.append(planetButton, manualButton, refreshButton, el("span", "toolbar-divider"), settingsSlot);
+tabBar.end.append(filesButton, planetButton, manualButton, refreshButton, el("span", "toolbar-divider"), settingsSlot);
 let zoomedTo = 100;
 const zoom = new ZoomController({
   save: (percent) => saveUiZoom(percent),
@@ -299,6 +309,27 @@ planetButton.addEventListener("click", () => {
   if (page !== "topology" || !viewingHome()) {
     showPage("topology");
   }
+});
+filesButton.addEventListener("click", () => {
+  const key = strip.activeKey;
+  if (!shellTargets.has(key) || viewingHome()) {
+    return;
+  }
+  if (filesShown.has(key)) {
+    filesShown.delete(key);
+  } else {
+    filesShown.add(key);
+  }
+  present(key);
+});
+// Files dragged in from Finder or Explorer go to the file transfer view on screen.
+void onNativeDrag((event) => {
+  const key = strip.activeKey;
+  if (signedIn && !viewingHome() && filesShown.has(key)) {
+    sftpViews.get(key)?.nativeDrag(event);
+  }
+}).catch(() => {
+  // Without the event the panes still work with buttons and in-app drags.
 });
 manualButton.addEventListener("click", () => {
   if (page === "manual" && viewingHome()) {
@@ -409,6 +440,7 @@ function present(key: string): void {
   terminalPanel.hidden = onHome;
   if (onHome) {
     terminal.activate(null);
+    showFiles(null);
     topologyRoot.hidden = page !== "topology";
     manualRoot.hidden = page !== "manual";
     statusBar.hidden = page !== "manual";
@@ -416,7 +448,10 @@ function present(key: string): void {
     topologyRoot.hidden = true;
     manualRoot.hidden = true;
     statusBar.hidden = true;
-    terminal.activate(key);
+    const files = filesShown.has(key) && shellTargets.has(key);
+    terminalPanel.hidden = files;
+    terminal.activate(files ? null : key);
+    showFiles(files ? key : null);
   }
   tabBar.render(strip);
   markActive();
@@ -424,6 +459,44 @@ function present(key: string): void {
   if (onHome) {
     void probePresenceNow();
   }
+}
+
+/** Show the file transfer view of `key`, or none. Creates it on first use. */
+function showFiles(key: string | null): void {
+  sftpPanel.hidden = key === null;
+  for (const [viewKey, view] of sftpViews) {
+    if (viewKey !== key) {
+      view.root.hidden = true;
+    }
+  }
+  if (key === null) {
+    return;
+  }
+  const target = shellTargets.get(key);
+  if (!target) {
+    return;
+  }
+  let view = sftpViews.get(key);
+  if (!view) {
+    view = mountSftpView(sftpPanel, target, tabTitle(key), {
+      onBack: () => {
+        filesShown.delete(key);
+        if (strip.activeKey === key) {
+          present(key);
+        }
+      },
+    });
+    sftpViews.set(key, view);
+  }
+  view.show();
+}
+
+function syncFilesButton(): void {
+  const key = strip.activeKey;
+  const usable = !viewingHome() && shellTargets.has(key);
+  filesButton.disabled = !usable;
+  filesButton.title = usable ? "在本机和远端之间传输文件" : "先打开一个会话标签";
+  filesButton.setAttribute("aria-pressed", usable && filesShown.has(key) ? "true" : "false");
 }
 
 function applyShortcut(action: ShortcutAction): void {
@@ -456,7 +529,16 @@ async function requestClose(key: string): Promise<void> {
   if (!tab || tab.kind !== "session") {
     return;
   }
-  if (needsCloseConfirm(tab.status) && !(await askCloseConfirm(tab.title))) {
+  const transfers = sftpViews.get(key)?.busy() ?? 0;
+  const ask =
+    transfers > 0
+      ? {
+          message: `还有 ${transfers} 项文件传输未完成，关闭标签会取消它们。`,
+          confirmLabel: "关闭标签",
+          focusCancel: true,
+        }
+      : undefined;
+  if ((needsCloseConfirm(tab.status) || transfers > 0) && !(await askCloseConfirm(tab.title, ask))) {
     present(strip.activeKey);
     return;
   }
@@ -464,6 +546,9 @@ async function requestClose(key: string): Promise<void> {
     return;
   }
   terminal.discard(key);
+  sftpViews.get(key)?.dispose();
+  sftpViews.delete(key);
+  filesShown.delete(key);
   shellTargets.delete(key);
   strip.close(key);
   present(strip.activeKey);
@@ -741,6 +826,7 @@ function render(result: ListHostsResponse): void {
 }
 
 function markActive(): void {
+  syncFilesButton();
   const active = strip.tabs.find((item) => item.key === strip.activeKey);
   const activeId = active?.track === "host" ? active.hostId ?? null : null;
   const activeName = active?.track === "device" ? active.deviceName ?? null : null;

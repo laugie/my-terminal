@@ -196,7 +196,8 @@ fn pipe_reader(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u
     rx
 }
 
-fn hide_console(command: &mut Command) {
+/// Also used by the SFTP connection, which starts ssh the same way.
+pub(crate) fn hide_console(command: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
