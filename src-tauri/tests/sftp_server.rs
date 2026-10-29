@@ -348,6 +348,7 @@ fn cancel_stops_and_removes_the_partial_file() {
     );
 
     let back = Scratch::new("back-cancel");
+    fs::write(back.path().join("big.bin"), b"original").unwrap();
     let cancel = AtomicBool::new(false);
     let source = format!("{}/big.bin", remote.text());
     let err = download(
@@ -363,10 +364,56 @@ fn cancel_stops_and_removes_the_partial_file() {
     )
     .unwrap_err();
     assert_eq!(err.kind, FailKind::Cancelled, "{err:?}");
-    assert!(
-        !back.path().join("big.bin").exists(),
-        "partial download left behind"
-    );
+    // A cancelled overwrite keeps the original and leaves no part file.
+    assert_eq!(fs::read(back.path().join("big.bin")).unwrap(), b"original");
+    let names: Vec<_> = fs::read_dir(back.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["big.bin"]);
+}
+
+#[test]
+fn read_only_files_can_be_copied_again() {
+    let Some(server) = start() else { return };
+    let local = Scratch::new("local-0444");
+    let remote = Scratch::new("remote-0444");
+    let back = Scratch::new("back-0444");
+    let file = local.path().join("ro.txt");
+    fs::write(&file, b"read only").unwrap();
+    Command::new("chmod")
+        .arg("444")
+        .arg(&file)
+        .status()
+        .unwrap();
+    let cancel = AtomicBool::new(false);
+    for _ in 0..2 {
+        upload(
+            &server.client,
+            &file,
+            remote.text(),
+            &cancel,
+            &mut |_, _| {},
+        )
+        .expect("upload");
+    }
+    let source = format!("{}/ro.txt", remote.text());
+    Command::new("chmod")
+        .arg("444")
+        .arg(&source)
+        .status()
+        .unwrap();
+    for _ in 0..2 {
+        download(
+            &server.client,
+            &source,
+            back.path(),
+            &cancel,
+            &mut |_, _| {},
+        )
+        .expect("download");
+    }
+    assert_eq!(fs::read(back.path().join("ro.txt")).unwrap(), b"read only");
 }
 
 #[test]

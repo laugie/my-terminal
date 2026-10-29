@@ -24,7 +24,7 @@ use tauri::Manager;
 
 use client::{SftpClient, SftpError};
 use local::Listing;
-use transfer::{FailKind, TransferError};
+use transfer::TransferError;
 
 /// ssh connect (10 s), login and the SFTP `VERSION` reply together.
 const START_TIMEOUT: Duration = Duration::from_secs(40);
@@ -534,6 +534,7 @@ pub async fn transfer_cancel(app: tauri::AppHandle, id: String) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
+    use super::transfer::FailKind;
     use super::*;
 
     #[test]

@@ -1,6 +1,8 @@
 //! Upload and download of one file or folder. A folder is walked first so the
 //! total size is known, then created and copied in order. Existing files at
-//! the destination are overwritten and existing folders are merged.
+//! the destination are overwritten and existing folders are merged. A
+//! download goes to a hidden part file first, so a failed overwrite keeps the
+//! local original; an upload writes the remote file in place.
 //!
 //! Symbolic links to files are copied as files. Links to folders inside a
 //! folder are skipped so a link loop cannot recurse forever.
@@ -349,7 +351,10 @@ fn download_file(
     let handle = client
         .open(&item.remote, proto::OPEN_READ, &Attrs::default())
         .map_err(|err| remote_error(err, &item.remote))?;
-    let mut file = match File::create(&item.local) {
+    // Write next to the destination and rename at the end, so a failed or
+    // cancelled overwrite leaves the original file as it was.
+    let part = part_path(&item.local);
+    let mut file = match File::create(&part) {
         Ok(file) => file,
         Err(err) => {
             let _ = client.close(&handle);
@@ -365,11 +370,40 @@ fn download_file(
     }
     drop(file);
     let _ = client.close(&handle);
+    let result = result.and_then(|_| {
+        replace_file(&part, &item.local).map_err(|err| local_error(&err, &item.local))
+    });
     if result.is_err() {
-        // A partial file would look complete; a retry starts from zero anyway.
-        let _ = fs::remove_file(&item.local);
+        let _ = fs::remove_file(&part);
     }
     result
+}
+
+/// A hidden, short sibling name for the file being downloaded.
+fn part_path(dest: &Path) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    dest.with_file_name(format!(".my-terminal-{}-{n}.part", std::process::id()))
+}
+
+/// Rename over an existing file. On Windows a scanner may hold a new file for
+/// a moment, so a sharing or access error is retried briefly.
+fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(err)
+                if cfg!(windows)
+                    && tries < 5
+                    && matches!(err.raw_os_error(), Some(5) | Some(32)) =>
+            {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -438,7 +472,8 @@ fn finish_local(file: &File, item: &Item) {
     #[cfg(unix)]
     if let Some(mode) = item.mode {
         use std::os::unix::fs::PermissionsExt;
-        let _ = file.set_permissions(fs::Permissions::from_mode(mode & 0o777));
+        // Keep owner write so the file can be overwritten by the next copy.
+        let _ = file.set_permissions(fs::Permissions::from_mode(mode & 0o777 | 0o200));
     }
 }
 
@@ -588,8 +623,9 @@ fn upload_file(
     progress: OnProgress<'_>,
 ) -> Result<(), TransferError> {
     let mut file = File::open(&item.local).map_err(|err| local_error(&err, &item.local))?;
+    // Owner write stays on so the next upload can overwrite the file.
     let attrs = Attrs {
-        permissions: item.mode,
+        permissions: item.mode.map(|mode| mode | 0o200),
         ..Attrs::default()
     };
     let handle = client
