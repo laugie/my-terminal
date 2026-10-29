@@ -137,3 +137,32 @@ export class CopyRelay {
     return text;
   }
 }
+
+/**
+ * Text for an OSC 52 clipboard write (`Pc;Pd`), or null to ignore it.
+ *
+ * tmux, vim and Claude Code inside tmux copy this way: the program draws its
+ * own selection, so the terminal has none for Cmd+C. Programs may set the
+ * clipboard but never read it: a `?` request gets no answer. An empty or bad
+ * payload leaves the clipboard alone.
+ */
+export function osc52Text(data: string): string | null {
+  const split = data.indexOf(";");
+  if (split < 0) {
+    return null;
+  }
+  const target = data.slice(0, split);
+  const payload = data.slice(split + 1);
+  if (!/^[cpqs0-7]*$/.test(target) || payload === "" || payload.length % 4 !== 0) {
+    return null;
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(payload)) {
+    return null;
+  }
+  try {
+    const bytes = Uint8Array.from(atob(payload), (char) => char.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}

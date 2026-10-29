@@ -4,6 +4,7 @@ import "@xterm/xterm/css/xterm.css";
 import { fontOf, themeOf, type FontChoice, type ThemeChoice } from "./appearance.ts";
 import {
   CopyRelay,
+  osc52Text,
   pasteConfirmText,
   pasteNeedsConfirm,
   rightClickAction,
@@ -160,6 +161,16 @@ export function mountTerminal(
       discarded: false,
     };
     sessions.set(key, session);
+    // tmux and Claude Code copy their own selection through OSC 52.
+    term.parser.registerOscHandler(52, (data) => {
+      const text = osc52Text(data);
+      if (text !== null) {
+        void writeClipboardText(text).catch((err: unknown) => {
+          showError(session, errorText(err));
+        });
+      }
+      return true;
+    });
     term.attachCustomKeyEventHandler((event) => {
       if (event.isComposing) {
         return true;
