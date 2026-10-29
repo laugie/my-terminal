@@ -36,6 +36,7 @@
     "src/tab-bar.test.ts",
     "src/presence.test.ts",
     "src/clipboard.test.ts",
-    "src/terminal-keys.test.ts"
+    "src/terminal-keys.test.ts",
+    "src/ime-input.test.ts"
   ]
 }

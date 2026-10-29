@@ -50,6 +50,7 @@ try {
     path.join(outDir, "presence.test.js"),
     path.join(outDir, "clipboard.test.js"),
     path.join(outDir, "terminal-keys.test.js"),
+    path.join(outDir, "ime-input.test.js"),
   ]);
 } finally {
   await rm(outDir, { recursive: true, force: true });
