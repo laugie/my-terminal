@@ -181,7 +181,7 @@ The name is built into user-visible and persistent places:
 
 - Add `tauri-plugin-updater`. Generate the update key with `tauri signer generate`, put the public key in `plugins.updater.pubkey`, point `plugins.updater.endpoints` at `latest.json` on GitHub Releases, set `bundle.createUpdaterArtifacts: true`, and give CI `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Source: <https://v2.tauri.app/plugin/updater/>.
 - The update key is separate from the code-signing certificates. If it is lost, existing installs cannot auto-update, so keep an offline backup.
-- The update check is the only network call the app makes on its own (besides opt-in features). It can be turned off in Settings.
+- The update check can be turned off in Settings. Section 5.2 lists every network action the app takes.
 
 ### 4.5 Package managers (P2)
 
